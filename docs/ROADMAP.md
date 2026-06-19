@@ -8,7 +8,7 @@ pretending that provider internals are stable.
 
 - Linux systemd user service install/uninstall/status.
 - Retention cleanup for old samples and poll errors.
-- Release builds for macOS and Linux.
+- Homebrew formula/tap, if installing via GitHub Releases is not enough.
 - Better terminal layout behavior for very narrow terminals.
 - More fixtures for provider response shape drift.
 

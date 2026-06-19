@@ -46,6 +46,40 @@ edges and occasional breakage.
 - The TUI should be glanceable: the bar is the analog clock, text is the
   digital readout.
 
+## Install
+
+Prebuilt binaries are published on GitHub Releases for:
+
+- macOS amd64 / arm64
+- Linux amd64 / arm64
+
+Install the latest release into `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/durandom/token-burn/main/scripts/install.sh | sh
+```
+
+Install a specific release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/durandom/token-burn/main/scripts/install.sh | TOKEN_BURN_VERSION=v0.1.0 sh
+```
+
+Then run:
+
+```sh
+token-burn version
+token-burn once --json
+token-burn tui
+```
+
+If `~/.local/bin` is not on your `PATH`, either add it or set
+`TOKEN_BURN_INSTALL_DIR`.
+
+```sh
+TOKEN_BURN_INSTALL_DIR=/usr/local/bin sh scripts/install.sh
+```
+
 ## Install From Source
 
 Requirements:
@@ -189,6 +223,16 @@ go test ./...
 go build -o bin/token-burn ./cmd/token-burn
 ```
 
+Publish a release by pushing a semver-ish tag:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow builds archives, publishes checksums, and attaches them to
+the GitHub Release.
+
 The code is intentionally split into small internal packages:
 
 ```text
@@ -214,7 +258,7 @@ Roadmap:
 - Linux systemd user service install
 - Windows viability check
 - retention cleanup
-- release builds
+- Homebrew formula/tap
 - more provider shapes as they appear
 
 More detail lives in [docs/ROADMAP.md](docs/ROADMAP.md).
