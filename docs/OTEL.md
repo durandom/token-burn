@@ -42,7 +42,8 @@ token_burn_forecast_confidence
 ```
 
 `token_burn_forecast_projected_reset_percent` is the projected usage percent at
-the current reset time if the observed burn rate continues.
+the current reset time if the observed burn rate continues. It is not capped at
+`100`; values above `100` represent projected overshoot before reset.
 
 Counters:
 
@@ -62,11 +63,11 @@ token_burn_poll_latency_ms
 Allowed attributes:
 
 ```text
-provider      # codex, claude
+provider      # codex, claude, copilot
 account_id    # configured alias/id, not email
-window        # five_hour, seven_day, etc.
+window        # five_hour, seven_day, ai_credits, etc.
 plan_type     # plus, pro, max, team, unknown
-source        # wham_usage, anthropic_oauth_usage
+source        # wham_usage, anthropic_oauth_usage, github_copilot
 ```
 
 Avoid high-cardinality attributes:

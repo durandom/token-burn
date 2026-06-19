@@ -69,6 +69,22 @@ func TestCalculateIncreasingUsage(t *testing.T) {
 	}
 }
 
+func TestCalculateProjectedResetCanExceedLimit(t *testing.T) {
+	t0 := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	reset := t0.Add(5 * time.Hour)
+	result := Calculate([]Observation{
+		{ObservedAt: t0, UsedPercent: 20, ResetAt: &reset},
+		{ObservedAt: t0.Add(time.Hour), UsedPercent: 40, ResetAt: &reset},
+	}, t0.Add(time.Hour))
+
+	if result.ProjectedResetPercent == nil || math.Abs(*result.ProjectedResetPercent-120) > 0.0001 {
+		t.Fatalf("ProjectedResetPercent = %v, want 120", result.ProjectedResetPercent)
+	}
+	if result.Estimated100At == nil || !result.Estimated100At.Equal(t0.Add(4*time.Hour)) {
+		t.Fatalf("Estimated100At = %v, want %v", result.Estimated100At, t0.Add(4*time.Hour))
+	}
+}
+
 func TestCalculateUsesLatestResetWindow(t *testing.T) {
 	t0 := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
 	oldReset := t0.Add(time.Hour)
@@ -121,6 +137,32 @@ func TestCalculateIgnoresMaterialDecreaseWithinSameReset(t *testing.T) {
 	}
 	if result.BurnRatePercentPerHour == nil || math.Abs(*result.BurnRatePercentPerHour-10) > 0.0001 {
 		t.Fatalf("burn = %v, want 10", result.BurnRatePercentPerHour)
+	}
+}
+
+func TestCalculateStartsNewSegmentAfterShortLargeJump(t *testing.T) {
+	t0 := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	reset := t0.Add(12 * 24 * time.Hour)
+
+	result := Calculate([]Observation{
+		{ObservedAt: t0, UsedPercent: 0, ResetAt: &reset},
+		{ObservedAt: t0.Add(time.Minute), UsedPercent: 0, ResetAt: &reset},
+		{ObservedAt: t0.Add(2 * time.Minute), UsedPercent: 37.2, ResetAt: &reset},
+		{ObservedAt: t0.Add(3 * time.Minute), UsedPercent: 37.2, ResetAt: &reset},
+		{ObservedAt: t0.Add(4 * time.Minute), UsedPercent: 37.2, ResetAt: &reset},
+	}, t0.Add(4*time.Minute))
+
+	if result.SampleCount != 3 {
+		t.Fatalf("SampleCount = %d, want 3 samples after jump", result.SampleCount)
+	}
+	if result.BurnRatePercentPerHour == nil || *result.BurnRatePercentPerHour != 0 {
+		t.Fatalf("burn = %v, want 0", result.BurnRatePercentPerHour)
+	}
+	if result.ProjectedResetPercent == nil || math.Abs(*result.ProjectedResetPercent-37.2) > 0.0001 {
+		t.Fatalf("ProjectedResetPercent = %v, want 37.2", result.ProjectedResetPercent)
+	}
+	if result.Estimated100At != nil {
+		t.Fatalf("Estimated100At = %v, want nil for flat usage after jump", result.Estimated100At)
 	}
 }
 

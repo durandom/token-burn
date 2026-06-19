@@ -64,11 +64,11 @@ func TestLoadMissingConfigReturnsDefaults(t *testing.T) {
 	if cfg.DatabasePath != DefaultDatabasePath() {
 		t.Fatalf("DatabasePath = %q, want %q", cfg.DatabasePath, DefaultDatabasePath())
 	}
-	if len(cfg.Accounts) != 2 {
-		t.Fatalf("default account count = %d, want 2", len(cfg.Accounts))
+	if len(cfg.Accounts) != 3 {
+		t.Fatalf("default account count = %d, want 3", len(cfg.Accounts))
 	}
-	if cfg.Accounts[0].Provider != "codex" || cfg.Accounts[1].Provider != "claude" {
-		t.Fatalf("default accounts = %#v, want codex and claude", cfg.Accounts)
+	if cfg.Accounts[0].Provider != "codex" || cfg.Accounts[1].Provider != "claude" || cfg.Accounts[2].Provider != "copilot" {
+		t.Fatalf("default accounts = %#v, want codex, claude, and copilot", cfg.Accounts)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("default config was not written: %v", err)

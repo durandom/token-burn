@@ -139,3 +139,83 @@ Relevant fields:
 - `resets_at` is a timestamp string.
 - Claude Code statusline/hook payloads have had inconsistent availability for
   rate limit data, so the direct OAuth usage endpoint is preferred.
+
+## GitHub Copilot
+
+### Endpoints
+
+```text
+gh api /copilot_internal/user
+gh api /users/<login>/settings/billing/ai_credit/usage?year=<yyyy>&month=<m>
+```
+
+The provider intentionally shells out to `gh api` instead of reading GitHub
+tokens directly. This keeps authentication delegated to GitHub CLI and avoids
+storing another token copy.
+
+### Credential Sources
+
+- logged-in GitHub CLI session from `gh auth login`
+
+### Response Shape
+
+Relevant fields from `/copilot_internal/user`:
+
+```json
+{
+  "login": "octocat",
+  "access_type_sku": "max_monthly_subscriber_quota",
+  "copilot_plan": "individual_max",
+  "quota_reset_date_utc": "2026-07-01T00:00:00.000Z",
+  "token_based_billing": true,
+  "quota_snapshots": {
+    "premium_interactions": {
+      "has_quota": true,
+      "entitlement": 20000,
+      "remaining": 15000,
+      "percent_remaining": 75,
+      "unlimited": false
+    },
+    "chat": {
+      "has_quota": true,
+      "unlimited": true
+    }
+  }
+}
+```
+
+Relevant fields from GitHub AI Credits usage:
+
+```json
+{
+  "usageItems": [
+    {
+      "product": "Copilot AI Credits",
+      "sku": "AI Credit",
+      "model": "GPT-5",
+      "unitType": "ai-credits",
+      "grossQuantity": 2000,
+      "grossAmount": 20,
+      "discountQuantity": 2000,
+      "discountAmount": 20,
+      "netQuantity": 0,
+      "netAmount": 0
+    }
+  ]
+}
+```
+
+### Notes
+
+- `/copilot_internal/user` is not a stable public REST API and may change.
+- GitHub's AI Credits usage endpoint is documented, but access still depends on
+  the logged-in GitHub account and permissions.
+- `token-burn` maps known individual plan allowances to a normalized monthly
+  `ai_credits` window: Pro 1500, Pro+ 7000, Max 20000.
+- The `ai_credits` window tracks included credit consumption from
+  `grossQuantity`. `netQuantity` and `netAmount` represent additional billable
+  usage after included credits or discounts.
+- Chat and completions may be reported as unlimited. Those windows are kept at
+  `0%` used when no finite entitlement is available.
+- Billing usage failures are recorded as provider raw metadata, but do not block
+  live quota windows from `/copilot_internal/user`.

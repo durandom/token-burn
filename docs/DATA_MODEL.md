@@ -79,6 +79,9 @@ CREATE INDEX IF NOT EXISTS idx_forecasts_latest
   ON forecasts(provider, account_id, window_name, computed_at DESC);
 ```
 
+`projected_reset_percent` is intentionally not bounded to `100`. A value above
+`100` means the current burn rate would overshoot the quota before reset.
+
 ## Normalized Windows
 
 Window names should be stable and low-cardinality:
@@ -92,6 +95,10 @@ Window names should be stable and low-cardinality:
 - `code_review_secondary`
 - `additional_<sanitized_feature>_primary`
 - `additional_<sanitized_feature>_secondary`
+- `premium_interactions`
+- `chat`
+- `completions`
+- `ai_credits`
 
 Additional provider-internal feature names may be present in storage, but UI
 surfaces should prefer stable human labels when the raw feature name is not

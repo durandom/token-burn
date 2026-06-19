@@ -193,6 +193,39 @@ func TestRenderUsageLineShowsRelativeResetAndResetFirst(t *testing.T) {
 	}
 }
 
+func TestRenderUsageLineShowsProjectedResetOvershoot(t *testing.T) {
+	model := NewModel(testConfig(t))
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	reset := now.Add(2 * time.Hour)
+	burn := 45.0
+	projectedReset := 127.0
+	estimated100 := now.Add(time.Hour)
+
+	line := renderUsageLine(model.styles, store.Sample{
+		Provider:    "copilot",
+		AccountID:   "copilot-default",
+		WindowName:  "ai_credits",
+		UsedPercent: 37.2,
+		ResetAt:     &reset,
+	}, &forecastRow{
+		Provider: "copilot",
+		Account:  "copilot-default",
+		Window:   "ai_credits",
+		Result: forecast.Result{
+			SampleCount:            2,
+			BurnRatePercentPerHour: &burn,
+			ProjectedResetPercent:  &projectedReset,
+			Estimated100At:         &estimated100,
+		},
+	}, now)
+
+	for _, want := range []string{"ai credits", "37.2%", "45.0%/h", "reset ~127%", "100% in 1h"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("line missing %q:\n%s", want, line)
+		}
+	}
+}
+
 func TestFormatRelativeTime(t *testing.T) {
 	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
 	tests := []struct {

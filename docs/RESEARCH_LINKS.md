@@ -36,6 +36,16 @@ libraries. `token-burn` does not import OpenUsage internals.
 - Claude Code issue requesting per-model weekly rate limits:
   https://github.com/anthropics/claude-code/issues/52661
 
+## GitHub Copilot
+
+- GitHub AI Credits billing for Copilot individuals:
+  https://docs.github.com/copilot/concepts/billing/usage-based-billing-for-individuals
+- GitHub REST billing usage endpoints:
+  https://docs.github.com/en/rest/billing/usage
+- Local `gh api /copilot_internal/user` probing showed Copilot quota snapshots
+  for chat, completions, and premium interactions. This endpoint is internal and
+  undocumented.
+
 ## Combined Tools
 
 - i3 coding agent usage tracker:

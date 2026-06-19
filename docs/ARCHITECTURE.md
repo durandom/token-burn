@@ -57,9 +57,9 @@ Providers must not inspect local sessions, transcripts, or token logs.
 
 Providers must not implement a separate authentication flow or store their own
 provider credentials. They reuse the standard local login artifacts already
-created by the vendor tool, such as Codex auth files or Claude Code OAuth
-credentials. If those credentials are missing or expired, the user should log in
-with the vendor tool.
+created by the vendor tool, such as Codex auth files, Claude Code OAuth
+credentials, or the logged-in GitHub CLI session. If those credentials are
+missing or expired, the user should log in with the vendor tool.
 
 The provider-owned live endpoint is the source of truth. This is what lets
 `token-burn` observe quota usage caused by the same account on other machines,
@@ -91,6 +91,15 @@ Forecast output includes:
 - estimated 90% and 100% exhaustion time
 - projected percent at reset
 - confidence
+
+Projected percent at reset is not capped at `100%`. Values above `100%` are
+intentional and show the expected overshoot if the current burn rate continues.
+The TUI bar remains visually capped, while the text and OTel metric keep the
+actual projection.
+
+Forecasting treats material usage jumps within a few minutes as a new segment.
+This avoids turning provider-side batch updates or local measurement fixes into
+impossible burn rates.
 
 ### OTel Export
 
@@ -150,6 +159,10 @@ id = "codex-default"
 [[accounts]]
 provider = "claude"
 id = "claude-default"
+
+[[accounts]]
+provider = "copilot"
+id = "copilot-default"
 ```
 
 ## Data Flow Details

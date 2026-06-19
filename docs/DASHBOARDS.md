@@ -27,6 +27,10 @@ The dashboard has two tabs:
   reset, usage time series, and a latest-window table.
 - `Forecast` shows burn rate, reset horizon, and poll run freshness.
 
+Projected percent at reset may exceed `100` when current burn would overshoot a
+quota before reset. Dashboard panels should not clamp this metric unless they
+explicitly want a visual progress bar.
+
 The `token-burn otel-test` command emits a synthetic sample with
 `provider = test`. The dashboard intentionally filters those samples out with
 `provider <> 'test'`.

@@ -20,6 +20,7 @@ import (
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 	"github.com/durandom/token-burn/internal/provider/claude"
 	"github.com/durandom/token-burn/internal/provider/codex"
+	"github.com/durandom/token-burn/internal/provider/copilot"
 	"github.com/durandom/token-burn/internal/service"
 	"github.com/durandom/token-burn/internal/store"
 	tokenburntui "github.com/durandom/token-burn/internal/tui"
@@ -532,6 +533,8 @@ func providerFor(name string) (usageprovider.Provider, bool) {
 		return codex.New(), true
 	case "claude", "claude_code":
 		return claude.New(), true
+	case "copilot", "github_copilot":
+		return copilot.New(), true
 	default:
 		return nil, false
 	}

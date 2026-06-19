@@ -69,6 +69,7 @@ func Default() Config {
 		Accounts: []Account{
 			{Provider: "codex", ID: "codex-default"},
 			{Provider: "claude", ID: "claude-default"},
+			{Provider: "copilot", ID: "copilot-default"},
 		},
 	}
 }
@@ -214,5 +215,9 @@ id = "codex-default"
 [[accounts]]
 provider = "claude"
 id = "claude-default"
+
+[[accounts]]
+provider = "copilot"
+id = "copilot-default"
 `, DefaultDatabasePath())
 }

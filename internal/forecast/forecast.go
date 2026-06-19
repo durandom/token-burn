@@ -9,6 +9,9 @@ import (
 const MethodLinearRegression = "linear_regression"
 
 const resetWindowTolerance = 2 * time.Minute
+const jumpWindowTolerance = 10 * time.Minute
+const jumpPercentTolerance = 5.0
+const minBurnRatePercentPerHour = 0.001
 
 type Observation struct {
 	ObservedAt  time.Time
@@ -58,6 +61,9 @@ func Calculate(observations []Observation, computedAt time.Time) Result {
 
 	burn := slope
 	if burn < 0 {
+		burn = 0
+	}
+	if burn < minBurnRatePercentPerHour {
 		burn = 0
 	}
 	result.BurnRatePercentPerHour = &burn
@@ -110,6 +116,11 @@ func stableSamples(observations []Observation) []Observation {
 	start := 0
 	for i := 1; i < len(samples); i++ {
 		if samples[i].UsedPercent+1 < samples[i-1].UsedPercent {
+			start = i
+			continue
+		}
+		if samples[i].UsedPercent-samples[i-1].UsedPercent > jumpPercentTolerance &&
+			samples[i].ObservedAt.Sub(samples[i-1].ObservedAt) <= jumpWindowTolerance {
 			start = i
 		}
 	}
@@ -195,9 +206,6 @@ func projectedResetPercent(last Observation, burnRatePercentPerHour float64) *fl
 	value := last.UsedPercent + burnRatePercentPerHour*hoursUntilReset
 	if value < 0 {
 		value = 0
-	}
-	if value > 100 {
-		value = 100
 	}
 	return &value
 }
