@@ -1,7 +1,10 @@
 # token-burn
 
-`token-burn` is a small local daemon, CLI, and TUI for watching live AI coding
-subscription quota usage.
+Live AI coding subscription quota monitor for Codex, ChatGPT, and Claude Code.
+
+`token-burn` is a small local daemon, CLI, and terminal dashboard for watching
+real provider-reported quota usage, reset times, burn rate, and forecasted
+exhaustion for AI coding tools.
 
 It answers the practical question:
 
@@ -26,13 +29,25 @@ edges and occasional breakage.
 
 ## What It Does
 
-- Polls live provider usage on a gentle interval, defaulting to 60 seconds.
-- Stores every observed quota window in local SQLite.
-- Shows current quota state in a fast terminal dashboard.
+- Monitors live Codex, ChatGPT, and Claude Code subscription quota usage.
+- Polls provider usage APIs on a gentle interval, defaulting to 60 seconds.
+- Stores every observed quota window in local SQLite for history.
+- Shows current quota state in a fast terminal UI dashboard.
 - Forecasts burn rate, exhaustion time, and projected percent at reset.
 - Exports current usage and forecast gauges through OpenTelemetry OTLP.
+- Ships an OpenObserve dashboard template for long-term observability.
 - Runs as a user service on macOS via LaunchAgent.
 - Reuses existing provider authentication from the vendor tools.
+
+## Use Cases
+
+- See whether a Codex or Claude Code subscription will hit a usage limit before
+  its reset time.
+- Track quota usage from all machines on the same provider account, not just the
+  current workstation.
+- Export AI coding subscription usage metrics into OpenTelemetry, OpenObserve,
+  Prometheus-compatible backends, or other observability systems.
+- Keep a local SQLite time-series history of provider-reported quota windows.
 
 ## Philosophy
 
