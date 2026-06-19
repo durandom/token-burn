@@ -146,16 +146,30 @@ Open the dashboard:
 The TUI is intentionally compact.
 
 ```text
-token-burn  last poll 10:17:37
+token-burn  last poll 14:03:55
 q quit  r refresh  auto-refresh 60s
 
+antigravity/antigravity-default
+  claude and gpt   [────────────────────────]   0.0%
+                   resets in 4h 59m · 0.0%/h · reset ~0%
+  gemini           [────────────────────────]   0.2%
+                   resets in 2h 51m · 0.0%/h · reset ~0%
+
 claude/claude-default
-  five hour        [███▒▒───────────────────]  14.0%
-                   resets in 1h 32m · 3.2%/h · reset ~19% · reset first
+  five hour        [█████▒▒▒▒▒▒─────────────]  20.0%
+                   resets in 2h 46m · 9.3%/h · reset ~46% · reset first
+  seven day        [██▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒]  10.0%
+                   resets in 6d 12h · 1.8%/h · reset ~285% · 100% in 2d 3h
+
+codex/codex-default
+  five hour        [█▒▒▒▒▒──────────────────]   3.0%
+                   resets in 4h 24m · 5.2%/h · reset ~26% · reset first
+  seven day        [███▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒]  12.0%
+                   resets in 5d 9h · 0.7%/h · reset ~100% · 100% in 5d 9h
 
 copilot/copilot-default
   ai credits       [█████████───────────────]  37.2%
-                   resets in 11d 13h · 0.0%/h · reset ~37%
+                   resets in 11d 11h · 0.0%/h · reset ~37%
 ```
 
 Bar legend:
