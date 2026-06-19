@@ -112,3 +112,9 @@ provider = test
 account_id = test
 window = test
 ```
+
+## Dashboards
+
+An OpenObserve dashboard template is included at
+`contrib/openobserve/token-burn.dashboard.json`. See
+[DASHBOARDS.md](DASHBOARDS.md) for import notes and dashboard scope.

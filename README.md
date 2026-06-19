@@ -222,6 +222,9 @@ export_interval = "60s"
 ```
 
 See [docs/OTEL.md](docs/OTEL.md) for metric names and a local collector sketch.
+An OpenObserve dashboard template lives in
+[contrib/openobserve/token-burn.dashboard.json](contrib/openobserve/token-burn.dashboard.json);
+import notes are in [docs/DASHBOARDS.md](docs/DASHBOARDS.md).
 
 ## Development
 
