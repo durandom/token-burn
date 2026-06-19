@@ -73,6 +73,12 @@ token-burn once --json
 token-burn tui
 ```
 
+Upgrade later:
+
+```sh
+token-burn upgrade
+```
+
 If `~/.local/bin` is not on your `PATH`, either add it or set
 `TOKEN_BURN_INSTALL_DIR`.
 
@@ -143,6 +149,7 @@ token-burn status
 token-burn history --provider codex --window five_hour --since 24h
 token-burn forecast --provider claude --window five_hour
 token-burn tui
+token-burn upgrade
 token-burn install
 token-burn service-status --json
 token-burn uninstall

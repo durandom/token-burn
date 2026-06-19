@@ -27,6 +27,20 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
+func TestUpgradeCommandIsRegistered(t *testing.T) {
+	cmd := NewRootCommand(BuildInfo{Version: "v0.1.0"})
+	found := false
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "upgrade" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("upgrade command is not registered")
+	}
+}
+
 func TestParseLookbackDuration(t *testing.T) {
 	tests := []struct {
 		raw  string

@@ -23,6 +23,7 @@ import (
 	"github.com/durandom/token-burn/internal/service"
 	"github.com/durandom/token-burn/internal/store"
 	tokenburntui "github.com/durandom/token-burn/internal/tui"
+	"github.com/durandom/token-burn/internal/upgrade"
 	"github.com/spf13/cobra"
 )
 
@@ -63,6 +64,7 @@ func NewRootCommand(build BuildInfo) *cobra.Command {
 	root.AddCommand(newServiceStatusCommand())
 	root.AddCommand(newOTelTestCommand(&configPath))
 	root.AddCommand(newTUICommand(&configPath))
+	root.AddCommand(newUpgradeCommand(build))
 
 	return root
 }
@@ -81,6 +83,44 @@ func newTUICommand(configPath *string) *cobra.Command {
 			return err
 		},
 	}
+}
+
+func newUpgradeCommand(build BuildInfo) *cobra.Command {
+	var repo string
+	var version string
+	var binaryPath string
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "upgrade",
+		Short: "Upgrade token-burn from GitHub Releases",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
+			defer cancel()
+			result, err := upgrade.Run(ctx, upgrade.Options{
+				Repo:       repo,
+				Version:    version,
+				Current:    build.Version,
+				BinaryPath: binaryPath,
+				Force:      force,
+			})
+			if err != nil {
+				return err
+			}
+			if !result.Changed {
+				fmt.Fprintf(cmd.OutOrStdout(), "token-burn is already up to date (%s)\n", result.From)
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "upgraded token-burn %s -> %s at %s\n", result.From, result.To, result.BinaryPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", upgrade.DefaultRepo, "GitHub repository")
+	cmd.Flags().StringVar(&version, "version", "latest", "release version or latest")
+	cmd.Flags().StringVar(&binaryPath, "binary", "", "binary path to replace")
+	cmd.Flags().BoolVar(&force, "force", false, "reinstall even if the target version matches")
+	return cmd
 }
 
 func newOTelTestCommand(configPath *string) *cobra.Command {

@@ -55,3 +55,19 @@ Options:
 - Avoid a tap until users actually need `brew install durandom/tap/token-burn`.
 
 For now, the install script is the primary prebuilt install path.
+
+## Upgrade
+
+Users installed from GitHub Releases can upgrade in place:
+
+```sh
+token-burn upgrade
+```
+
+The command downloads the matching archive for the current OS/architecture,
+verifies `checksums.txt`, and replaces the running binary path. A specific
+release can be installed with:
+
+```sh
+token-burn upgrade --version v0.1.0
+```
