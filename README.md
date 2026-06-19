@@ -161,13 +161,13 @@ claude/claude-default
   seven day        [██▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒]  10.0%
                    resets in 6d 12h · 1.8%/h · reset ~285% · 100% in 2d 3h
 
-codex/codex-default
+codex/codex-default  pro
   five hour        [█▒▒▒▒▒──────────────────]   3.0%
                    resets in 4h 24m · 5.2%/h · reset ~26% · reset first
   seven day        [███▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒]  12.0%
                    resets in 5d 9h · 0.7%/h · reset ~100% · 100% in 5d 9h
 
-copilot/copilot-default
+copilot/copilot-default  individual max
   ai credits       [█████████───────────────]  37.2%
                    resets in 11d 11h · 0.0%/h · reset ~37%
 ```
@@ -181,6 +181,10 @@ Bar legend:
 `reset ~N%` is the projected usage at reset. It can exceed `100%` when the
 current burn rate would overshoot the quota before reset; the bar itself remains
 capped at full.
+
+Provider/account headers include a plan label only when the live provider
+response exposes one. `token-burn` does not infer subscription names from local
+logs or pricing tables.
 
 The TUI reads SQLite only. Provider polling belongs to the daemon, so refreshing
 the dashboard does not create extra provider requests.

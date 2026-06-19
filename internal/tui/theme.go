@@ -57,27 +57,34 @@ func BlulocoLightTheme() Theme {
 }
 
 type styles struct {
-	title    lipgloss.Style
-	subtle   lipgloss.Style
-	panel    lipgloss.Style
-	heading  lipgloss.Style
-	good     lipgloss.Style
-	warn     lipgloss.Style
-	bad      lipgloss.Style
-	provider lipgloss.Style
-	barBg    lipgloss.Style
+	title     lipgloss.Style
+	subtle    lipgloss.Style
+	panel     lipgloss.Style
+	panelGood lipgloss.Style
+	panelWarn lipgloss.Style
+	panelBad  lipgloss.Style
+	heading   lipgloss.Style
+	good      lipgloss.Style
+	warn      lipgloss.Style
+	bad       lipgloss.Style
+	provider  lipgloss.Style
+	barBg     lipgloss.Style
 }
 
 func newStyles(theme Theme) styles {
+	panel := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(theme.Panel).Padding(0, 1)
 	return styles{
-		title:    lipgloss.NewStyle().Foreground(theme.Accent).Bold(true),
-		subtle:   lipgloss.NewStyle().Foreground(theme.Muted),
-		panel:    lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(theme.Panel).Padding(0, 1),
-		heading:  lipgloss.NewStyle().Foreground(theme.Fg).Bold(true),
-		good:     lipgloss.NewStyle().Foreground(theme.Good).Bold(true),
-		warn:     lipgloss.NewStyle().Foreground(theme.Warn).Bold(true),
-		bad:      lipgloss.NewStyle().Foreground(theme.Bad).Bold(true),
-		provider: lipgloss.NewStyle().Foreground(theme.Accent).Bold(true),
-		barBg:    lipgloss.NewStyle().Foreground(theme.BarBg),
+		title:     lipgloss.NewStyle().Foreground(theme.Accent).Bold(true),
+		subtle:    lipgloss.NewStyle().Foreground(theme.Muted),
+		panel:     panel,
+		panelGood: panel.BorderForeground(theme.Good),
+		panelWarn: panel.BorderForeground(theme.Warn),
+		panelBad:  panel.BorderForeground(theme.Bad),
+		heading:   lipgloss.NewStyle().Foreground(theme.Fg).Bold(true),
+		good:      lipgloss.NewStyle().Foreground(theme.Good).Bold(true),
+		warn:      lipgloss.NewStyle().Foreground(theme.Warn).Bold(true),
+		bad:       lipgloss.NewStyle().Foreground(theme.Bad).Bold(true),
+		provider:  lipgloss.NewStyle().Foreground(theme.Accent).Bold(true),
+		barBg:     lipgloss.NewStyle().Foreground(theme.BarBg),
 	}
 }

@@ -120,6 +120,7 @@ func mapUserResponse(user userResponse, acct usageprovider.Account, observedAt t
 	resetAt := parseReset(user.QuotaResetDateUTC, user.QuotaResetDate, observedAt)
 	for _, name := range stableSnapshotNames(user.QuotaSnapshots) {
 		quota := user.QuotaSnapshots[name]
+		addQuotaRaw(&snap, name, quota)
 		win, ok := windowFromQuota(name, quota, resetAt)
 		if !ok {
 			continue
@@ -127,6 +128,27 @@ func mapUserResponse(user userResponse, acct usageprovider.Account, observedAt t
 		snap.Windows = append(snap.Windows, win)
 	}
 	return snap
+}
+
+func addQuotaRaw(snap *usageprovider.Snapshot, name string, quota quotaSnapshot) {
+	prefix := "quota_" + usageprovider.NormalizeWindowName(name) + "_"
+	if quota.Entitlement != nil {
+		snap.Raw[prefix+"entitlement"] = *quota.Entitlement
+	}
+	if quota.QuotaRemaining != nil {
+		snap.Raw[prefix+"remaining"] = *quota.QuotaRemaining
+	} else if quota.Remaining != nil {
+		snap.Raw[prefix+"remaining"] = *quota.Remaining
+	}
+	if quota.PercentRemaining != nil {
+		snap.Raw[prefix+"percent_remaining"] = *quota.PercentRemaining
+	}
+	if quota.Unlimited != nil {
+		snap.Raw[prefix+"unlimited"] = *quota.Unlimited
+	}
+	if quota.TokenBasedBilling {
+		snap.Raw[prefix+"token_based_billing"] = quota.TokenBasedBilling
+	}
 }
 
 func windowFromQuota(name string, quota quotaSnapshot, resetAt *time.Time) (usageprovider.Window, bool) {

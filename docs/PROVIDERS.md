@@ -212,6 +212,11 @@ Relevant fields from GitHub AI Credits usage:
   the logged-in GitHub account and permissions.
 - `token-burn` maps known individual plan allowances to a normalized monthly
   `ai_credits` window: Pro 1500, Pro+ 7000, Max 20000.
+- The provider also preserves locally returned subscription/quota metadata such
+  as `copilot_plan`, `access_type_sku`, and per-window `entitlement`,
+  `remaining`, `percent_remaining`, and `unlimited` flags. These are stored as
+  raw diagnostic metadata when raw storage/output is enabled; they are not
+  guessed from pricing pages.
 - The `ai_credits` window tracks included credit consumption from
   `grossQuantity`. `netQuantity` and `netAmount` represent additional billable
   usage after included credits or discounts.
@@ -219,6 +224,19 @@ Relevant fields from GitHub AI Credits usage:
   `0%` used when no finite entitlement is available.
 - Billing usage failures are recorded as provider raw metadata, but do not block
   live quota windows from `/copilot_internal/user`.
+
+## Subscription Metadata
+
+`token-burn` only records plan labels that are present in provider-owned live
+responses or vendor-owned local state:
+
+- Codex currently exposes `plan_type` through `wham/usage`.
+- GitHub Copilot exposes `copilot_plan`, `access_type_sku`, and quota
+  entitlements through `/copilot_internal/user`.
+- Claude Code's OAuth usage endpoint currently exposes usage buckets and reset
+  times, but no verified plan label.
+- Google Antigravity's Cloud Code endpoint currently exposes model quota labels,
+  remaining fraction, and reset time, but no verified subscription label.
 
 ## Google Antigravity
 

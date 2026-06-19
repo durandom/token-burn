@@ -17,9 +17,10 @@ func TestViewRendersSamples(t *testing.T) {
 	remaining := 88.0
 	model := NewModel(testConfig(t))
 	model.samples = []store.Sample{{
-		Provider:         "codex",
-		AccountID:        "codex-default",
+		Provider:         "copilot",
+		AccountID:        "copilot-default",
 		WindowName:       "five_hour",
+		PlanType:         "individual_max",
 		UsedPercent:      12,
 		RemainingPercent: &remaining,
 		ResetAt:          &reset,
@@ -28,8 +29,8 @@ func TestViewRendersSamples(t *testing.T) {
 	estimated100 := reset
 	projectedReset := 50.0
 	model.forecasts = []forecastRow{{
-		Provider: "codex",
-		Account:  "codex-default",
+		Provider: "copilot",
+		Account:  "copilot-default",
 		Window:   "five_hour",
 		Result: forecast.Result{
 			SampleCount:            2,
@@ -41,10 +42,17 @@ func TestViewRendersSamples(t *testing.T) {
 	model.lastPoll = time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
 
 	view := model.View()
-	for _, want := range []string{"token-burn", "codex/codex-default", "five hour", "12.0%", "[", "█", "▒", "10.0%/h", "reset ~50%", "100% in"} {
+	for _, want := range []string{"token-burn", "copilot/copilot-default  individual max", "five hour", "12.0%", "[", "█", "▒", "10.0%/h", "reset ~50%", "100% in"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestAccountHeaderOmitsEmptyPlan(t *testing.T) {
+	got := accountHeader("claude/claude-default", []store.Sample{{PlanType: ""}})
+	if got != "claude/claude-default" {
+		t.Fatalf("accountHeader() = %q, want provider/account only", got)
 	}
 }
 

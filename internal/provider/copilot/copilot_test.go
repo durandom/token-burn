@@ -74,6 +74,18 @@ func TestFetchMapsCopilotQuotaAndAICredits(t *testing.T) {
 	if got := snap.Raw["ai_credit_net_amount_usd"]; got != 0.0 {
 		t.Fatalf("ai_credit_net_amount_usd = %#v, want 0", got)
 	}
+	if got := snap.Raw["quota_premium_interactions_entitlement"]; got != 20000.0 {
+		t.Fatalf("quota_premium_interactions_entitlement = %#v, want 20000", got)
+	}
+	if got := snap.Raw["quota_premium_interactions_remaining"]; got != 15000.0 {
+		t.Fatalf("quota_premium_interactions_remaining = %#v, want 15000", got)
+	}
+	if got := snap.Raw["quota_premium_interactions_unlimited"]; got != false {
+		t.Fatalf("quota_premium_interactions_unlimited = %#v, want false", got)
+	}
+	if got := snap.Raw["quota_chat_unlimited"]; got != true {
+		t.Fatalf("quota_chat_unlimited = %#v, want true", got)
+	}
 }
 
 func TestFetchKeepsQuotaWhenBillingUsageFails(t *testing.T) {

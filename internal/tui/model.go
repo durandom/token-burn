@@ -143,7 +143,7 @@ func (m Model) renderUsage() string {
 		sort.Slice(rows, func(i, j int) bool { return rows[i].WindowName < rows[j].WindowName })
 		var b strings.Builder
 		now := time.Now()
-		b.WriteString(m.styles.provider.Render(key))
+		b.WriteString(renderAccountHeader(m.styles, key, rows))
 		b.WriteString("\n")
 		for _, row := range rows {
 			forecastRow, ok := forecasts[forecastKey(row.Provider, row.AccountID, row.WindowName)]
@@ -154,9 +154,66 @@ func (m Model) renderUsage() string {
 			}
 			b.WriteString("\n")
 		}
-		blocks = append(blocks, m.styles.panel.Render(strings.TrimRight(b.String(), "\n")))
+		blocks = append(blocks, accountPanelStyle(m.styles, rows, forecasts).Render(strings.TrimRight(b.String(), "\n")))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, blocks...)
+}
+
+func accountHeader(key string, rows []store.Sample) string {
+	for _, row := range rows {
+		if strings.TrimSpace(row.PlanType) != "" {
+			return key + "  " + displayPlanType(row.PlanType)
+		}
+	}
+	return key
+}
+
+func renderAccountHeader(st styles, key string, rows []store.Sample) string {
+	header := accountHeader(key, rows)
+	if header == key {
+		return st.provider.Render(key)
+	}
+	plan := strings.TrimPrefix(header, key)
+	return st.provider.Render(key) + st.subtle.Render(plan)
+}
+
+func displayPlanType(plan string) string {
+	plan = strings.TrimSpace(plan)
+	if plan == "" {
+		return ""
+	}
+	return strings.ReplaceAll(plan, "_", " ")
+}
+
+func accountPanelStyle(st styles, rows []store.Sample, forecasts map[string]forecastRow) lipgloss.Style {
+	level := 0
+	for _, row := range rows {
+		level = max(level, riskLevel(row.UsedPercent))
+		if forecastRow, ok := forecasts[forecastKey(row.Provider, row.AccountID, row.WindowName)]; ok {
+			if projected := forecastRow.Result.ProjectedResetPercent; projected != nil {
+				level = max(level, riskLevel(*projected))
+			}
+		}
+	}
+	switch level {
+	case 2:
+		return st.panelBad
+	case 1:
+		return st.panelWarn
+	default:
+		return st.panelGood
+	}
+}
+
+func riskLevel(percent float64) int {
+	switch {
+	case percent >= 100:
+		return 2
+	case percent >= 70:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (m Model) refresh() tea.Cmd {
@@ -253,18 +310,28 @@ func renderUsageLine(st styles, sample store.Sample, forecastRow *forecastRow, n
 	if sample.ResetAt != nil {
 		reset = "resets " + formatRelativeTime(*sample.ResetAt, now)
 	}
-	forecastText := "need history"
-	if forecastRow != nil {
-		forecastText = formatInlineForecast(*forecastRow, sample, now)
-	}
-	detail := strings.TrimSpace(strings.Join(nonEmpty(reset, forecastText), " · "))
-	return fmt.Sprintf("  %-28s %s %s\n  %-28s %s",
-		truncateCell(displayWindowName(sample.WindowName), 28),
+	detail := renderDetail(st, reset, forecastRow, sample, now)
+	name := fmt.Sprintf("%-28s", truncateCell(displayWindowName(sample.WindowName), 28))
+	return fmt.Sprintf("  %s %s %s\n  %-28s %s",
+		st.heading.Render(name),
 		renderBar(st, sample.UsedPercent, projectedResetPercent(forecastRow), color),
 		color.Render(fmt.Sprintf("%5.1f%%", sample.UsedPercent)),
 		"",
-		st.subtle.Render(detail),
+		detail,
 	)
+}
+
+func renderDetail(st styles, reset string, forecastRow *forecastRow, sample store.Sample, now time.Time) string {
+	var parts []string
+	if reset != "" {
+		parts = append(parts, st.subtle.Render(reset))
+	}
+	if forecastRow == nil {
+		parts = append(parts, st.subtle.Render("need history"))
+		return strings.Join(parts, st.subtle.Render(" · "))
+	}
+	parts = append(parts, renderInlineForecast(st, *forecastRow, sample, now)...)
+	return strings.Join(parts, st.subtle.Render(" · "))
 }
 
 func renderBar(st styles, percent float64, projected *float64, color lipgloss.Style) string {
@@ -326,50 +393,57 @@ func projectedResetPercent(row *forecastRow) *float64 {
 	return row.Result.ProjectedResetPercent
 }
 
-func nonEmpty(values ...string) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func formatInlineForecast(row forecastRow, sample store.Sample, now time.Time) string {
+func renderInlineForecast(st styles, row forecastRow, sample store.Sample, now time.Time) []string {
 	if row.Result.BurnRatePercentPerHour == nil {
+		message := ""
 		switch row.Result.InsufficientDataReason {
 		case "":
-			return "need history"
+			message = "need history"
 		case "one_sample":
-			return "need another sample"
+			message = "need another sample"
 		case "no_samples":
-			return "no history"
+			message = "no history"
 		case "flat_usage":
-			return "flat usage"
+			message = "flat usage"
 		default:
-			return row.Result.InsufficientDataReason
+			message = row.Result.InsufficientDataReason
 		}
+		return []string{st.subtle.Render(message)}
 	}
-	parts := []string{fmt.Sprintf("%.1f%%/h", *row.Result.BurnRatePercentPerHour)}
+	rateStyle := forecastValueStyle(st, sample.UsedPercent)
 	if row.Result.ProjectedResetPercent != nil {
-		parts = append(parts, fmt.Sprintf("reset ~%.0f%%", *row.Result.ProjectedResetPercent))
+		rateStyle = forecastValueStyle(st, *row.Result.ProjectedResetPercent)
+	}
+	parts := []string{rateStyle.Render(fmt.Sprintf("%.1f%%/h", *row.Result.BurnRatePercentPerHour))}
+	if row.Result.ProjectedResetPercent != nil {
+		projected := *row.Result.ProjectedResetPercent
+		parts = append(parts, forecastValueStyle(st, projected).Render(fmt.Sprintf("reset ~%.0f%%", projected)))
 	}
 	if row.Result.Estimated100At != nil {
 		if sample.ResetAt != nil && row.Result.Estimated100At.After(*sample.ResetAt) {
-			parts = append(parts, "reset first")
+			parts = append(parts, st.good.Render("reset first"))
 		} else {
-			parts = append(parts, "100% "+formatRelativeTime(*row.Result.Estimated100At, now))
+			parts = append(parts, st.bad.Render("100% "+formatRelativeTime(*row.Result.Estimated100At, now)))
 		}
 	} else if row.Result.Estimated90At != nil {
 		if sample.ResetAt != nil && row.Result.Estimated90At.After(*sample.ResetAt) {
-			parts = append(parts, "reset first")
+			parts = append(parts, st.good.Render("reset first"))
 		} else {
-			parts = append(parts, "90% "+formatRelativeTime(*row.Result.Estimated90At, now))
+			parts = append(parts, st.warn.Render("90% "+formatRelativeTime(*row.Result.Estimated90At, now)))
 		}
 	}
-	return strings.Join(parts, " · ")
+	return parts
+}
+
+func forecastValueStyle(st styles, percent float64) lipgloss.Style {
+	switch {
+	case percent >= 100:
+		return st.bad
+	case percent >= 70:
+		return st.warn
+	default:
+		return st.good
+	}
 }
 
 func displayWindowName(name string) string {
