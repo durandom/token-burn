@@ -219,3 +219,108 @@ Relevant fields from GitHub AI Credits usage:
   `0%` used when no finite entitlement is available.
 - Billing usage failures are recorded as provider raw metadata, but do not block
   live quota windows from `/copilot_internal/user`.
+
+## Google Antigravity
+
+### Endpoint
+
+```text
+POST https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels
+POST https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels
+```
+
+### Headers
+
+```text
+Authorization: Bearer <google_oauth_access_token>
+Content-Type: application/json
+Accept: application/json
+User-Agent: antigravity
+```
+
+### Credential Sources
+
+- Antigravity VS Code-compatible state database:
+  `~/Library/Application Support/Antigravity IDE/User/globalStorage/state.vscdb`
+- Antigravity app state database:
+  `~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb`
+- macOS Keychain item used by `agy`: service `gemini`, account `antigravity`
+
+`token-burn` does not start a Google OAuth login flow and does not write back to
+Antigravity's state database or Keychain item. If the stored access token has
+expired and OAuth client credentials are supplied via environment, it uses the
+existing vendor refresh token to mint a short-lived access token through
+Google's OAuth token endpoint, then stores only that access token in
+token-burn's own XDG cache.
+
+### State Database Token Shape
+
+Antigravity stores OAuth state in `ItemTable` under key
+`antigravityUnifiedStateSync.oauthToken`. The value is a double-wrapped base64
+protobuf envelope with a sentinel string:
+
+```text
+oauthTokenInfoSentinelKey
+```
+
+The final `OAuthTokenInfo` protobuf includes an access token, refresh token, and
+expiry timestamp. `token-burn` uses the refresh token only reactively when the
+access token is expired or rejected.
+
+### Token Refresh
+
+```text
+POST https://oauth2.googleapis.com/token
+Content-Type: application/x-www-form-urlencoded
+
+client_id=${TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID}
+client_secret=${TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_SECRET}
+refresh_token=<refresh_token>
+grant_type=refresh_token
+```
+
+The refreshed access token is cached at:
+
+```text
+${XDG_CACHE_HOME:-~/.cache}/token-burn/antigravity-auth.json
+```
+
+### Response Shape
+
+Relevant fields from `fetchAvailableModels`:
+
+```json
+{
+  "models": {
+    "gemini-3-pro": {
+      "displayName": "Gemini 3 Pro",
+      "model": "gemini-3-pro",
+      "quotaInfo": {
+        "remainingFraction": 0.8,
+        "resetTime": "2026-06-26T10:00:00Z"
+      }
+    },
+    "claude-sonnet": {
+      "displayName": "Claude Sonnet 4.5",
+      "model": "claude-sonnet",
+      "quotaInfo": {
+        "remainingFraction": 0.45,
+        "resetTime": "2026-06-19T15:00:00Z"
+      }
+    }
+  }
+}
+```
+
+### Notes
+
+- Antigravity quota is fraction-based. `used_percent = 100 -
+  remainingFraction * 100`.
+- `token-burn` normalizes returned model quotas into two pooled windows:
+  `gemini` and `claude_and_gpt`.
+- For each pool, the most constrained user-facing model drives the window.
+- Internal, hidden, and known legacy Gemini 2.5/placeholder model rows are
+  ignored.
+- The local Antigravity/`agy` language-server quota summary can expose richer
+  session-vs-weekly buckets, but this provider intentionally starts with the
+  process-free OAuth-backed Cloud Code API.

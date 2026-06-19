@@ -27,6 +27,10 @@ The dashboard has two tabs:
   reset, usage time series, and a latest-window table.
 - `Forecast` shows burn rate, reset horizon, and poll run freshness.
 
+Queries group by generic `provider`, `account_id`, and `window` attributes, so
+new providers such as GitHub Copilot and Google Antigravity appear without
+dashboard JSON changes.
+
 Projected percent at reset may exceed `100` when current burn would overshoot a
 quota before reset. Dashboard panels should not clamp this metric unless they
 explicitly want a visual progress bar.

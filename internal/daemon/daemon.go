@@ -11,6 +11,7 @@ import (
 	"github.com/durandom/token-burn/internal/forecast"
 	"github.com/durandom/token-burn/internal/otel"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
+	"github.com/durandom/token-burn/internal/provider/antigravity"
 	"github.com/durandom/token-burn/internal/provider/claude"
 	"github.com/durandom/token-burn/internal/provider/codex"
 	"github.com/durandom/token-burn/internal/provider/copilot"
@@ -225,6 +226,8 @@ func (o Options) providerFor(name string) (usageprovider.Provider, bool) {
 		return claude.New(), true
 	case "copilot", "github_copilot":
 		return copilot.New(), true
+	case "antigravity", "agy":
+		return antigravity.New(), true
 	default:
 		return nil, false
 	}

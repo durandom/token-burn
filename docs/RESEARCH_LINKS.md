@@ -46,6 +46,17 @@ libraries. `token-burn` does not import OpenUsage internals.
   for chat, completions, and premium interactions. This endpoint is internal and
   undocumented.
 
+## Google Antigravity
+
+- CodexBar Antigravity provider notes:
+  https://github.com/steipete/CodexBar/blob/main/docs/antigravity.md
+- OpenUsage Antigravity provider notes and plugin strategy:
+  https://github.com/robinebers/openusage/blob/main/docs/providers/antigravity.md
+- Antigravity Usage CLI:
+  https://github.com/skainguyen1412/antigravity-usage
+- Antigravity Usage Checker:
+  https://github.com/tungcorn/antigravity-usage-checker
+
 ## Combined Tools
 
 - i3 coding agent usage tracker:

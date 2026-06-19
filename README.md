@@ -1,7 +1,7 @@
 # token-burn
 
-Live AI coding subscription quota monitor for Codex/OpenAI, Claude Code, and
-GitHub Copilot.
+Live AI coding subscription quota monitor for Codex/OpenAI, Claude Code,
+GitHub Copilot, and Google Antigravity.
 
 `token-burn` is a small local daemon, CLI, and terminal dashboard for watching
 real provider-reported quota usage, reset times, burn rate, and forecasted
@@ -26,14 +26,16 @@ other machines.
   `https://api.anthropic.com/api/oauth/usage`
 - GitHub Copilot quota and AI Credits usage via the logged-in GitHub CLI:
   `gh api /copilot_internal/user` and GitHub billing usage endpoints
+- Google Antigravity model quota usage via existing Antigravity OAuth state and
+  Google Cloud Code usage endpoints
 
 These endpoints and credential files are not stable public APIs. Expect sharp
 edges and occasional breakage.
 
 ## What It Does
 
-- Monitors live Codex/OpenAI, Claude Code, and GitHub Copilot subscription
-  quota usage.
+- Monitors live Codex/OpenAI, Claude Code, GitHub Copilot, and Google
+  Antigravity subscription quota usage.
 - Polls provider usage APIs on a gentle interval, defaulting to 60 seconds.
 - Stores every observed quota window in local SQLite for history.
 - Shows current quota state in a fast terminal UI dashboard.
@@ -45,8 +47,8 @@ edges and occasional breakage.
 
 ## Use Cases
 
-- See whether a Codex, Claude Code, or GitHub Copilot subscription will hit a
-  usage limit before its reset time.
+- See whether a Codex, Claude Code, GitHub Copilot, or Google Antigravity
+  subscription will hit a usage limit before its reset time.
 - Track quota usage from all machines on the same provider account, not just the
   current workstation.
 - Export AI coding subscription usage metrics into OpenTelemetry, OpenObserve,
@@ -59,8 +61,8 @@ edges and occasional breakage.
 
 - The provider is the source of truth.
 - The local database is history, not authority.
-- Authentication belongs to Codex, Claude Code, GitHub CLI, and the OS
-  credential store.
+- Authentication belongs to Codex, Claude Code, GitHub CLI, Google Antigravity,
+  and the OS credential store.
 - OpenTelemetry is the integration path for serious dashboards and retention.
 - The default experience should work on a normal logged-in workstation.
 - The TUI should be glanceable: the bar is the analog clock, text is the
@@ -111,7 +113,8 @@ TOKEN_BURN_INSTALL_DIR=/usr/local/bin sh scripts/install.sh
 Requirements:
 
 - Go 1.26+
-- A logged-in Codex, Claude Code, and/or GitHub CLI installation
+- A logged-in Codex, Claude Code, GitHub CLI, and/or Google Antigravity
+  installation
 - macOS for `install` service management today
 
 ```sh
@@ -177,6 +180,7 @@ token-burn status
 token-burn history --provider codex --window five_hour --since 24h
 token-burn forecast --provider claude --window five_hour
 token-burn forecast --provider copilot --window ai_credits
+token-burn forecast --provider antigravity --window claude_and_gpt
 token-burn tui
 token-burn upgrade
 token-burn install
@@ -220,6 +224,10 @@ id = "claude-default"
 [[accounts]]
 provider = "copilot"
 id = "copilot-default"
+
+[[accounts]]
+provider = "antigravity"
+id = "antigravity-default"
 ```
 
 ## Authentication
@@ -242,6 +250,13 @@ Claude credentials are read from:
 GitHub Copilot credentials are not read directly. The Copilot provider shells
 out to the logged-in GitHub CLI and uses `gh api`, so `gh auth login` is the
 only setup path.
+
+Google Antigravity credentials are read from existing Antigravity state stores
+and, on macOS, the `agy` Keychain item. `token-burn` does not run a Google OAuth
+login flow or write back to Antigravity credential stores. If the stored access
+token is expired and OAuth client credentials are supplied via environment, it
+uses the existing vendor refresh token to mint a short-lived access token and
+caches only that access token under token-burn's own XDG cache.
 
 Secrets are treated as secrets. Authorization headers and obvious token/cookie
 fields are redacted from diagnostics.
@@ -288,6 +303,7 @@ internal/provider/       provider interface and shared models
 internal/provider/codex/ live Codex usage client
 internal/provider/claude live Claude usage client
 internal/provider/copilot live GitHub Copilot usage client
+internal/provider/antigravity live Google Antigravity usage client
 internal/store/          SQLite schema and queries
 internal/forecast/       burn-rate and reset projection logic
 internal/otel/           OTLP metric exporter

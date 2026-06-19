@@ -58,8 +58,16 @@ Providers must not inspect local sessions, transcripts, or token logs.
 Providers must not implement a separate authentication flow or store their own
 provider credentials. They reuse the standard local login artifacts already
 created by the vendor tool, such as Codex auth files, Claude Code OAuth
-credentials, or the logged-in GitHub CLI session. If those credentials are
-missing or expired, the user should log in with the vendor tool.
+credentials, the logged-in GitHub CLI session, or Antigravity OAuth state. If
+those credentials are missing or expired, the user should log in or refresh with
+the vendor tool.
+
+Providers may refresh short-lived access tokens with an existing vendor refresh
+token when that is the normal vendor credential shape, but they must not run a
+new login flow or overwrite vendor credential stores. Any local cache should
+contain only short-lived access tokens owned by `token-burn`. OAuth client
+credentials must come from the local environment or vendor-owned state, not from
+hardcoded repository constants.
 
 The provider-owned live endpoint is the source of truth. This is what lets
 `token-burn` observe quota usage caused by the same account on other machines,
@@ -180,5 +188,5 @@ id = "copilot-default"
 - Linux service management should use systemd user services.
 - Retention cleanup should run at daemon start and then daily.
 - Raw JSON should remain opt-in diagnostics.
-- Token refresh should only be added if needed for basic reliability and should
-  still reuse vendor credential stores.
+- Token refresh must remain narrowly scoped to existing vendor refresh tokens
+  and must not overwrite vendor credential stores.

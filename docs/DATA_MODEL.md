@@ -99,6 +99,8 @@ Window names should be stable and low-cardinality:
 - `chat`
 - `completions`
 - `ai_credits`
+- `gemini`
+- `claude_and_gpt`
 
 Additional provider-internal feature names may be present in storage, but UI
 surfaces should prefer stable human labels when the raw feature name is not
