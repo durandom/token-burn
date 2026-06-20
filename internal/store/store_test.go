@@ -128,8 +128,8 @@ func TestLatestSamplesReturnsLatestPerWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LatestSamples() error = %v", err)
 	}
-	if len(latest) != 2 {
-		t.Fatalf("latest length = %d, want 2", len(latest))
+	if len(latest) != 1 {
+		t.Fatalf("latest length = %d, want 1", len(latest))
 	}
 
 	byWindow := map[string]Sample{}
@@ -142,8 +142,8 @@ func TestLatestSamplesReturnsLatestPerWindow(t *testing.T) {
 	if !byWindow["five_hour"].ObservedAt.Equal(t1) {
 		t.Fatalf("latest five_hour observed_at = %s, want %s", byWindow["five_hour"].ObservedAt, t1)
 	}
-	if got := byWindow["seven_day"].UsedPercent; got != 4 {
-		t.Fatalf("latest seven_day used = %v, want 4", got)
+	if _, ok := byWindow["seven_day"]; ok {
+		t.Fatal("latest samples should not include windows omitted from newest snapshot")
 	}
 }
 

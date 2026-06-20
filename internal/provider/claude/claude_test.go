@@ -49,7 +49,7 @@ func TestFetchMapsUsageBuckets(t *testing.T) {
 				"is_enabled": false,
 				"monthly_limit": null,
 				"used_credits": null,
-				"utilization": null
+				"utilization": 100.0
 			}
 		}`))
 	}))
@@ -94,7 +94,42 @@ func TestFetchMapsUsageBuckets(t *testing.T) {
 		t.Fatalf("seven_day_oauth_apps used = %v, want 3", got)
 	}
 	if _, ok := byName["extra_usage"]; ok {
-		t.Fatalf("extra_usage with null utilization should be skipped")
+		t.Fatalf("disabled extra_usage should be skipped")
+	}
+}
+
+func TestFetchMapsEnabledExtraUsage(t *testing.T) {
+	credPath := writeCredentials(t, `{"claudeAiOauth":{"accessToken":"claude-token"}}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"extra_usage": {
+				"is_enabled": true,
+				"monthly_limit": 100,
+				"used_credits": 25,
+				"utilization": 25.0
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	snap, err := (&Provider{
+		BaseURL: server.URL,
+		HomeDir: func() (string, error) {
+			return t.TempDir(), nil
+		},
+		Env: func(string) string { return "" },
+	}).Fetch(context.Background(), usageprovider.Account{
+		ID:              "claude-default",
+		CredentialsFile: credPath,
+	})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+
+	byName := windowsByName(snap.Windows)
+	if got := byName["extra_usage"].UsedPercent; got != 25 {
+		t.Fatalf("extra_usage used = %v, want 25", got)
 	}
 }
 

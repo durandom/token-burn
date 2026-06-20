@@ -137,6 +137,9 @@ Relevant fields:
 
 - `utilization` is already a percent.
 - `resets_at` is a timestamp string.
+- `extra_usage` is additional/overage usage, not a normal reset quota bucket.
+  It is only mapped when Claude reports it as enabled or returns concrete
+  extra usage accounting fields.
 - Claude Code statusline/hook payloads have had inconsistent availability for
   rate limit data, so the direct OAuth usage endpoint is preferred.
 

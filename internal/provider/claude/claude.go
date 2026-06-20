@@ -176,6 +176,9 @@ func addBucket(snap *usageprovider.Snapshot, name string, bucket *usageBucket) {
 	if bucket == nil || bucket.Utilization == nil {
 		return
 	}
+	if name == "extra_usage" && !bucket.extraUsageEnabled() {
+		return
+	}
 	var resetAt *time.Time
 	if strings.TrimSpace(bucket.ResetsAt) != "" {
 		parsed, err := time.Parse(time.RFC3339, bucket.ResetsAt)
@@ -192,6 +195,16 @@ func addBucket(snap *usageprovider.Snapshot, name string, bucket *usageBucket) {
 		return
 	}
 	snap.Windows = append(snap.Windows, win)
+}
+
+func (b *usageBucket) extraUsageEnabled() bool {
+	if b == nil {
+		return false
+	}
+	if b.IsEnabled != nil {
+		return *b.IsEnabled
+	}
+	return b.MonthlyLimit != nil || b.UsedCredits != nil
 }
 
 func accessTokenFromJSON(data []byte) (string, error) {

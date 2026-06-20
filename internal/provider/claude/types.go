@@ -11,6 +11,9 @@ type usageResponse struct {
 }
 
 type usageBucket struct {
-	Utilization *float64 `json:"utilization"`
-	ResetsAt    string   `json:"resets_at"`
+	Utilization  *float64 `json:"utilization"`
+	ResetsAt     string   `json:"resets_at"`
+	IsEnabled    *bool    `json:"is_enabled"`
+	MonthlyLimit *float64 `json:"monthly_limit"`
+	UsedCredits  *float64 `json:"used_credits"`
 }

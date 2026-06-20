@@ -409,15 +409,12 @@ SELECT
   s.raw_json,
   s.created_at
 FROM live_usage_samples s
-JOIN (
-  SELECT window_name, MAX(observed_at) AS observed_at
-  FROM live_usage_samples
-  WHERE provider = ? AND account_id = ?
-  GROUP BY window_name
-) latest
-  ON latest.window_name = s.window_name
- AND latest.observed_at = s.observed_at
 WHERE s.provider = ? AND s.account_id = ?
+  AND s.observed_at = (
+    SELECT MAX(observed_at)
+    FROM live_usage_samples
+    WHERE provider = ? AND account_id = ?
+  )
 ORDER BY s.window_name;
 `, providerName, accountID, providerName, accountID)
 	if err != nil {
