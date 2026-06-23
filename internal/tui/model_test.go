@@ -103,6 +103,74 @@ func TestLatestSampleTime(t *testing.T) {
 	}
 }
 
+func TestLatestPollOrSampleTimeUsesPollErrors(t *testing.T) {
+	sampleAt := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	pollAt := sampleAt.Add(time.Hour)
+	got := latestPollOrSampleTime(map[string]accountPollStatus{
+		"antigravity/antigravity-default": {
+			hasRun: true,
+			run: store.PollRun{
+				StartedAt: pollAt,
+				Provider:  "antigravity",
+				AccountID: "antigravity-default",
+				Status:    "error",
+			},
+		},
+	}, []store.Sample{{ObservedAt: sampleAt}})
+	if !got.Equal(pollAt) {
+		t.Fatalf("latestPollOrSampleTime() = %v, want %v", got, pollAt)
+	}
+}
+
+func TestPollStatusErrorsReportsLatestProviderFailure(t *testing.T) {
+	t0 := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	got := pollStatusErrors(map[string]accountPollStatus{
+		"antigravity/antigravity-default": {
+			hasRun:         true,
+			latestSampleAt: t0.Add(-time.Minute),
+			run: store.PollRun{
+				StartedAt:    t0,
+				Provider:     "antigravity",
+				AccountID:    "antigravity-default",
+				Status:       "error",
+				ErrorCode:    "auth_expired",
+				ErrorMessage: "antigravity: auth_expired",
+			},
+		},
+		"codex/codex-default": {
+			hasRun: true,
+			run: store.PollRun{
+				Provider:  "codex",
+				AccountID: "codex-default",
+				Status:    "success",
+			},
+		},
+	})
+	if len(got) != 1 || !strings.Contains(got[0], "antigravity/antigravity-default latest poll failed: antigravity: auth_expired") {
+		t.Fatalf("pollStatusErrors() = %#v", got)
+	}
+}
+
+func TestPollStatusErrorsIgnoresOlderFailureThanSample(t *testing.T) {
+	t0 := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	got := pollStatusErrors(map[string]accountPollStatus{
+		"antigravity/antigravity-default": {
+			hasRun:         true,
+			latestSampleAt: t0.Add(time.Minute),
+			run: store.PollRun{
+				StartedAt:    t0,
+				Provider:     "antigravity",
+				AccountID:    "antigravity-default",
+				Status:       "error",
+				ErrorMessage: "antigravity: auth_expired",
+			},
+		},
+	})
+	if len(got) != 0 {
+		t.Fatalf("pollStatusErrors() = %#v, want no current errors", got)
+	}
+}
+
 func TestThemeIsAvailable(t *testing.T) {
 	theme := DefaultTheme()
 	if theme.Name != "Bluloco Dark" || theme.Accent != "#3476ff" {
@@ -198,6 +266,21 @@ func TestRenderUsageLineShowsRelativeResetAndResetFirst(t *testing.T) {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q:\n%s", want, line)
 		}
+	}
+}
+
+func TestRenderUsageLineShowsStaleSample(t *testing.T) {
+	model := NewModel(testConfig(t))
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	line := renderUsageLine(model.styles, store.Sample{
+		Provider:    "antigravity",
+		AccountID:   "antigravity-default",
+		WindowName:  "gemini",
+		ObservedAt:  now.Add(-3 * time.Hour),
+		UsedPercent: 40.5,
+	}, nil, now)
+	if !strings.Contains(line, "stale 3h ago") {
+		t.Fatalf("line missing stale marker:\n%s", line)
 	}
 }
 

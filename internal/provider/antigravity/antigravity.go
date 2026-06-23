@@ -60,7 +60,7 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 		return usageprovider.Snapshot{}, &usageprovider.Error{
 			Code:     usageprovider.ErrAuthMissing,
 			Provider: id,
-			Err:      errors.New("antigravity oauth token not found; start Antigravity or run agy"),
+			Err:      errors.New("antigravity oauth token not found; start Antigravity or run agy models"),
 		}
 	}
 
@@ -101,7 +101,7 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 		return usageprovider.Snapshot{}, &usageprovider.Error{
 			Code:     usageprovider.ErrAuthExpired,
 			Provider: id,
-			Err:      errors.New("antigravity oauth token expired; start Antigravity or run agy to refresh vendor credentials"),
+			Err:      errors.New("antigravity oauth token expired; start Antigravity or run agy models to refresh vendor credentials"),
 		}
 	}
 	if lastErr != nil {

@@ -28,12 +28,6 @@ type keychainReader func() (string, error)
 
 func (p *Provider) tokenCandidates() ([]tokenCandidate, error) {
 	var candidates []tokenCandidate
-	if cached, err := p.cachedAccessToken(); err == nil && cached.AccessToken != "" {
-		cached.Source = "token_burn_cache"
-		candidates = append(candidates, cached)
-	} else if err != nil {
-		return nil, err
-	}
 	for _, path := range p.stateDBCandidates() {
 		token, err := readTokenFromStateDB(path)
 		if errors.Is(err, os.ErrNotExist) {
@@ -52,6 +46,12 @@ func (p *Provider) tokenCandidates() ([]tokenCandidate, error) {
 			token.Source = "keychain"
 			candidates = append(candidates, token)
 		}
+	} else if err != nil {
+		return nil, err
+	}
+	if cached, err := p.cachedAccessToken(); err == nil && cached.AccessToken != "" {
+		cached.Source = "token_burn_cache"
+		candidates = append(candidates, cached)
 	} else if err != nil {
 		return nil, err
 	}

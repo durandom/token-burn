@@ -37,6 +37,12 @@ type refreshMsg struct {
 	lastPoll  time.Time
 }
 
+type accountPollStatus struct {
+	run            store.PollRun
+	hasRun         bool
+	latestSampleAt time.Time
+}
+
 type forecastRow struct {
 	Provider string
 	Account  string
@@ -229,23 +235,92 @@ func (m Model) refresh() tea.Cmd {
 
 		now := time.Now()
 		var errors []string
+		pollStatus := map[string]accountPollStatus{}
 
 		var samples []store.Sample
 		for _, acct := range cfg.Accounts {
+			status, err := latestPollStatus(ctx, db, acct.Provider, acct.ID, now)
+			if err != nil {
+				errors = append(errors, err.Error())
+			} else {
+				pollStatus[accountKey(acct.Provider, acct.ID)] = status
+			}
+
 			latest, err := db.LatestSamples(ctx, acct.Provider, acct.ID)
 			if err != nil {
 				errors = append(errors, err.Error())
 				continue
 			}
 			samples = append(samples, latest...)
+			if sampleAt := latestSampleTime(latest); !sampleAt.IsZero() {
+				key := accountKey(acct.Provider, acct.ID)
+				status := pollStatus[key]
+				status.latestSampleAt = sampleAt
+				pollStatus[key] = status
+			}
 		}
+		errors = append(errors, pollStatusErrors(pollStatus)...)
 		return refreshMsg{
 			samples:   samples,
 			forecasts: buildForecastRows(ctx, db, samples, now),
 			errors:    errors,
-			lastPoll:  latestSampleTime(samples),
+			lastPoll:  latestPollOrSampleTime(pollStatus, samples),
 		}
 	}
+}
+
+func latestPollStatus(ctx context.Context, db *store.Store, providerName, accountID string, now time.Time) (accountPollStatus, error) {
+	since := now.Add(-24 * time.Hour)
+	runs, err := db.PollRuns(ctx, store.PollRunFilter{
+		Provider:  providerName,
+		AccountID: accountID,
+		Since:     &since,
+	})
+	if err != nil {
+		return accountPollStatus{}, err
+	}
+	if len(runs) == 0 {
+		return accountPollStatus{}, nil
+	}
+	return accountPollStatus{run: runs[len(runs)-1], hasRun: true}, nil
+}
+
+func pollStatusErrors(statuses map[string]accountPollStatus) []string {
+	var keys []string
+	for key := range statuses {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var errors []string
+	for _, key := range keys {
+		status := statuses[key]
+		if !status.hasRun || status.run.Status != "error" {
+			continue
+		}
+		if !status.latestSampleAt.IsZero() && !status.run.StartedAt.After(status.latestSampleAt) {
+			continue
+		}
+		message := strings.TrimSpace(status.run.ErrorMessage)
+		if message == "" {
+			message = strings.TrimSpace(status.run.ErrorCode)
+		}
+		if message == "" {
+			message = "poll failed"
+		}
+		errors = append(errors, fmt.Sprintf("%s latest poll failed: %s", key, message))
+	}
+	return errors
+}
+
+func latestPollOrSampleTime(statuses map[string]accountPollStatus, samples []store.Sample) time.Time {
+	latest := latestSampleTime(samples)
+	for _, status := range statuses {
+		if status.hasRun && status.run.StartedAt.After(latest) {
+			latest = status.run.StartedAt
+		}
+	}
+	return latest
 }
 
 func latestSampleTime(samples []store.Sample) time.Time {
@@ -311,6 +386,13 @@ func renderUsageLine(st styles, sample store.Sample, forecastRow *forecastRow, n
 		reset = "resets " + formatRelativeTime(*sample.ResetAt, now)
 	}
 	detail := renderDetail(st, reset, forecastRow, sample, now)
+	if stale := staleSampleLabel(sample, now); stale != "" {
+		if detail == "" {
+			detail = st.warn.Render(stale)
+		} else {
+			detail = st.warn.Render(stale) + st.subtle.Render(" · ") + detail
+		}
+	}
 	name := fmt.Sprintf("%-28s", truncateCell(displayWindowName(sample.WindowName), 28))
 	return fmt.Sprintf("  %s %s %s\n  %-28s %s",
 		st.heading.Render(name),
@@ -319,6 +401,24 @@ func renderUsageLine(st styles, sample store.Sample, forecastRow *forecastRow, n
 		"",
 		detail,
 	)
+}
+
+func staleSampleLabel(sample store.Sample, now time.Time) string {
+	if sample.ObservedAt.IsZero() {
+		return ""
+	}
+	if now.Sub(sample.ObservedAt) <= staleSampleThreshold() {
+		return ""
+	}
+	return "stale " + formatRelativeTime(sample.ObservedAt, now)
+}
+
+func staleSampleThreshold() time.Duration {
+	threshold := 2 * refreshInterval
+	if threshold < 3*time.Minute {
+		return 3 * time.Minute
+	}
+	return threshold
 }
 
 func renderDetail(st styles, reset string, forecastRow *forecastRow, sample store.Sample, now time.Time) string {
@@ -332,6 +432,10 @@ func renderDetail(st styles, reset string, forecastRow *forecastRow, sample stor
 	}
 	parts = append(parts, renderInlineForecast(st, *forecastRow, sample, now)...)
 	return strings.Join(parts, st.subtle.Render(" · "))
+}
+
+func accountKey(providerName, accountID string) string {
+	return providerName + "/" + accountID
 }
 
 func renderBar(st styles, percent float64, projected *float64, color lipgloss.Style) string {
