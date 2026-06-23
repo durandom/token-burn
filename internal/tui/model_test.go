@@ -40,9 +40,21 @@ func TestViewRendersSamples(t *testing.T) {
 		},
 	}}
 	model.lastPoll = time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	model.lastGood = model.lastPoll
 
 	view := model.View()
-	for _, want := range []string{"token-burn", "copilot/copilot-default  individual max", "five hour", "12.0%", "[", "█", "▒", "10.0%/h", "reset ~50%", "100% in"} {
+	for _, want := range []string{"token-burn", "last success", "copilot/copilot-default  individual max", "five hour", "12.0%", "[", "█", "▒", "10.0%/h", "reset ~50%", "100% in"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestViewRendersAlerts(t *testing.T) {
+	model := NewModel(testConfig(t))
+	model.alerts = []alert{{level: 2, message: "antigravity/latest poll failed"}}
+	view := model.View()
+	for _, want := range []string{"Alerts", "error", "antigravity/latest poll failed"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -122,6 +134,17 @@ func TestLatestPollOrSampleTimeUsesPollErrors(t *testing.T) {
 	}
 }
 
+func TestLatestSuccessTimeUsesSamplesAndSuccessfulPolls(t *testing.T) {
+	sampleAt := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	successAt := sampleAt.Add(time.Hour)
+	got := latestSuccessTime(map[string]accountPollStatus{
+		"codex/codex-default": {latestSuccess: successAt},
+	}, []store.Sample{{ObservedAt: sampleAt}})
+	if !got.Equal(successAt) {
+		t.Fatalf("latestSuccessTime() = %v, want %v", got, successAt)
+	}
+}
+
 func TestPollStatusErrorsReportsLatestProviderFailure(t *testing.T) {
 	t0 := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
 	got := pollStatusErrors(map[string]accountPollStatus{
@@ -168,6 +191,108 @@ func TestPollStatusErrorsIgnoresOlderFailureThanSample(t *testing.T) {
 	})
 	if len(got) != 0 {
 		t.Fatalf("pollStatusErrors() = %#v, want no current errors", got)
+	}
+}
+
+func TestRenderAccountHealth(t *testing.T) {
+	model := NewModel(testConfig(t))
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	line := renderAccountHealth(model.styles, accountPollStatus{
+		hasRun: true,
+		run: store.PollRun{
+			StartedAt: now.Add(-5 * time.Minute),
+			Status:    "error",
+		},
+	}, now)
+	if !strings.Contains(line, "poll failed 5m ago") {
+		t.Fatalf("health missing failed status: %q", line)
+	}
+	line = renderAccountHealth(model.styles, accountPollStatus{latestSuccess: now.Add(-2 * time.Minute)}, now)
+	if !strings.Contains(line, "ok 2m ago") {
+		t.Fatalf("health missing ok status: %q", line)
+	}
+	line = renderAccountHealth(model.styles, accountPollStatus{
+		hasRun:         true,
+		latestSampleAt: now,
+		run: store.PollRun{
+			StartedAt: now.Add(-5 * time.Minute),
+			Status:    "error",
+		},
+	}, now)
+	if strings.Contains(line, "poll failed") {
+		t.Fatalf("health should ignore older failure: %q", line)
+	}
+}
+
+func TestBuildAlertsIncludesOnlyPollAndFreshnessRisk(t *testing.T) {
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	projected := 101.0
+	alerts := buildAlerts(map[string]accountPollStatus{
+		"antigravity/antigravity-default": {
+			hasRun:         true,
+			latestSampleAt: now.Add(-time.Hour),
+			run: store.PollRun{
+				StartedAt:    now,
+				Status:       "error",
+				ErrorMessage: "auth expired",
+			},
+		},
+	}, []store.Sample{{
+		Provider:    "codex",
+		AccountID:   "codex-default",
+		WindowName:  "five_hour",
+		ObservedAt:  now.Add(-4 * time.Hour),
+		UsedPercent: 91,
+	}}, []forecastRow{{
+		Provider: "codex",
+		Account:  "codex-default",
+		Window:   "five_hour",
+		Result: forecast.Result{
+			SampleCount:            5,
+			BurnRatePercentPerHour: ptrFloat(20),
+			ProjectedResetPercent:  &projected,
+			Confidence:             0.8,
+		},
+	}}, nil, now)
+
+	joined := ""
+	for _, alert := range alerts {
+		joined += alert.message + "\n"
+	}
+	for _, want := range []string{"latest poll failed", "stale 4h ago"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("alerts missing %q:\n%s", want, joined)
+		}
+	}
+	for _, unwanted := range []string{"91.0% used", "projected 101% by reset"} {
+		if strings.Contains(joined, unwanted) {
+			t.Fatalf("alerts include usage/forecast warning %q:\n%s", unwanted, joined)
+		}
+	}
+}
+
+func TestBuildAlertsSkipsProjectedReset(t *testing.T) {
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	projected := 7612.0
+	alerts := buildAlerts(nil, []store.Sample{{
+		Provider:    "codex",
+		AccountID:   "codex-default",
+		WindowName:  "additional_secondary",
+		ObservedAt:  now,
+		UsedPercent: 9,
+	}}, []forecastRow{{
+		Provider: "codex",
+		Account:  "codex-default",
+		Window:   "additional_secondary",
+		Result: forecast.Result{
+			SampleCount:            2,
+			BurnRatePercentPerHour: ptrFloat(45),
+			ProjectedResetPercent:  &projected,
+			Confidence:             0.4,
+		},
+	}}, nil, now)
+	if len(alerts) != 0 {
+		t.Fatalf("alerts = %#v, want none for projection-only risk", alerts)
 	}
 }
 
@@ -345,4 +470,8 @@ func testConfig(t *testing.T) config.Config {
 		HTTPTimeout:  15 * time.Second,
 		Accounts:     []config.Account{{Provider: "codex", ID: "codex-default"}},
 	}
+}
+
+func ptrFloat(v float64) *float64 {
+	return &v
 }

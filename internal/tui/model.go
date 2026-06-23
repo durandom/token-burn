@@ -23,9 +23,12 @@ type Model struct {
 	width     int
 	height    int
 	lastPoll  time.Time
+	lastGood  time.Time
 	loading   bool
 	samples   []store.Sample
 	forecasts []forecastRow
+	statuses  map[string]accountPollStatus
+	alerts    []alert
 	errors    []string
 }
 
@@ -33,14 +36,23 @@ type tickMsg struct{}
 type refreshMsg struct {
 	samples   []store.Sample
 	forecasts []forecastRow
+	statuses  map[string]accountPollStatus
+	alerts    []alert
 	errors    []string
 	lastPoll  time.Time
+	lastGood  time.Time
 }
 
 type accountPollStatus struct {
 	run            store.PollRun
 	hasRun         bool
+	latestSuccess  time.Time
 	latestSampleAt time.Time
+}
+
+type alert struct {
+	level   int
+	message string
 }
 
 type forecastRow struct {
@@ -88,8 +100,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.samples = msg.samples
 		m.forecasts = msg.forecasts
+		m.statuses = msg.statuses
+		m.alerts = msg.alerts
 		m.errors = msg.errors
 		m.lastPoll = msg.lastPoll
+		m.lastGood = msg.lastGood
 		return m, nil
 	}
 	return m, nil
@@ -110,12 +125,17 @@ func (m Model) View() string {
 	} else {
 		b.WriteString(st.subtle.Render("waiting for first poll"))
 	}
+	if !m.lastGood.IsZero() {
+		b.WriteString(st.subtle.Render(" · last success " + m.lastGood.Local().Format("15:04:05")))
+	} else {
+		b.WriteString(st.subtle.Render(" · no successful refresh yet"))
+	}
 	b.WriteString("\n")
 	b.WriteString(st.subtle.Render("q quit  r refresh  auto-refresh 60s"))
 	b.WriteString("\n\n")
 
-	if len(m.errors) > 0 {
-		b.WriteString(st.panel.Render(st.bad.Render("Errors") + "\n" + strings.Join(m.errors, "\n")))
+	if len(m.alerts) > 0 {
+		b.WriteString(renderAlerts(st, m.alerts))
 		b.WriteString("\n\n")
 	}
 
@@ -149,7 +169,8 @@ func (m Model) renderUsage() string {
 		sort.Slice(rows, func(i, j int) bool { return rows[i].WindowName < rows[j].WindowName })
 		var b strings.Builder
 		now := time.Now()
-		b.WriteString(renderAccountHeader(m.styles, key, rows))
+		status := m.statuses[key]
+		b.WriteString(renderAccountHeader(m.styles, key, rows, status, now))
 		b.WriteString("\n")
 		for _, row := range rows {
 			forecastRow, ok := forecasts[forecastKey(row.Provider, row.AccountID, row.WindowName)]
@@ -174,13 +195,14 @@ func accountHeader(key string, rows []store.Sample) string {
 	return key
 }
 
-func renderAccountHeader(st styles, key string, rows []store.Sample) string {
+func renderAccountHeader(st styles, key string, rows []store.Sample, status accountPollStatus, now time.Time) string {
 	header := accountHeader(key, rows)
+	health := renderAccountHealth(st, status, now)
 	if header == key {
-		return st.provider.Render(key)
+		return st.provider.Render(key) + health
 	}
 	plan := strings.TrimPrefix(header, key)
-	return st.provider.Render(key) + st.subtle.Render(plan)
+	return st.provider.Render(key) + st.subtle.Render(plan) + health
 }
 
 func displayPlanType(plan string) string {
@@ -222,6 +244,19 @@ func riskLevel(percent float64) int {
 	}
 }
 
+func renderAccountHealth(st styles, status accountPollStatus, now time.Time) string {
+	if currentPollFailure(status) {
+		return st.bad.Render("  poll failed " + formatRelativeTime(status.run.StartedAt, now))
+	}
+	if !status.latestSuccess.IsZero() {
+		return st.good.Render("  ok " + formatRelativeTime(status.latestSuccess, now))
+	}
+	if !status.latestSampleAt.IsZero() {
+		return st.warn.Render("  sample " + formatRelativeTime(status.latestSampleAt, now))
+	}
+	return st.subtle.Render("  no poll yet")
+}
+
 func (m Model) refresh() tea.Cmd {
 	cfg := m.cfg
 	return func() tea.Msg {
@@ -256,21 +291,28 @@ func (m Model) refresh() tea.Cmd {
 				key := accountKey(acct.Provider, acct.ID)
 				status := pollStatus[key]
 				status.latestSampleAt = sampleAt
+				if status.latestSuccess.IsZero() {
+					status.latestSuccess = sampleAt
+				}
 				pollStatus[key] = status
 			}
 		}
-		errors = append(errors, pollStatusErrors(pollStatus)...)
+		forecasts := buildForecastRows(ctx, db, samples, now)
+		alerts := buildAlerts(pollStatus, samples, forecasts, errors, now)
 		return refreshMsg{
 			samples:   samples,
-			forecasts: buildForecastRows(ctx, db, samples, now),
+			forecasts: forecasts,
+			statuses:  pollStatus,
+			alerts:    alerts,
 			errors:    errors,
 			lastPoll:  latestPollOrSampleTime(pollStatus, samples),
+			lastGood:  latestSuccessTime(pollStatus, samples),
 		}
 	}
 }
 
 func latestPollStatus(ctx context.Context, db *store.Store, providerName, accountID string, now time.Time) (accountPollStatus, error) {
-	since := now.Add(-24 * time.Hour)
+	since := now.Add(-7 * 24 * time.Hour)
 	runs, err := db.PollRuns(ctx, store.PollRunFilter{
 		Provider:  providerName,
 		AccountID: accountID,
@@ -282,7 +324,14 @@ func latestPollStatus(ctx context.Context, db *store.Store, providerName, accoun
 	if len(runs) == 0 {
 		return accountPollStatus{}, nil
 	}
-	return accountPollStatus{run: runs[len(runs)-1], hasRun: true}, nil
+	status := accountPollStatus{run: runs[len(runs)-1], hasRun: true}
+	for i := len(runs) - 1; i >= 0; i-- {
+		if runs[i].Status == "success" {
+			status.latestSuccess = runs[i].StartedAt
+			break
+		}
+	}
+	return status, nil
 }
 
 func pollStatusErrors(statuses map[string]accountPollStatus) []string {
@@ -295,10 +344,7 @@ func pollStatusErrors(statuses map[string]accountPollStatus) []string {
 	var errors []string
 	for _, key := range keys {
 		status := statuses[key]
-		if !status.hasRun || status.run.Status != "error" {
-			continue
-		}
-		if !status.latestSampleAt.IsZero() && !status.run.StartedAt.After(status.latestSampleAt) {
+		if !currentPollFailure(status) {
 			continue
 		}
 		message := strings.TrimSpace(status.run.ErrorMessage)
@@ -313,6 +359,33 @@ func pollStatusErrors(statuses map[string]accountPollStatus) []string {
 	return errors
 }
 
+func buildAlerts(statuses map[string]accountPollStatus, samples []store.Sample, _ []forecastRow, errors []string, now time.Time) []alert {
+	var alerts []alert
+	for _, err := range errors {
+		if strings.TrimSpace(err) != "" {
+			alerts = append(alerts, alert{level: 2, message: err})
+		}
+	}
+	for _, message := range pollStatusErrors(statuses) {
+		alerts = append(alerts, alert{level: 2, message: message})
+	}
+
+	for _, sample := range samples {
+		label := accountKey(sample.Provider, sample.AccountID) + " " + displayWindowName(sample.WindowName)
+		if stale := staleSampleLabel(sample, now); stale != "" {
+			alerts = append(alerts, alert{level: 1, message: label + " " + stale})
+		}
+	}
+
+	sort.SliceStable(alerts, func(i, j int) bool {
+		if alerts[i].level != alerts[j].level {
+			return alerts[i].level > alerts[j].level
+		}
+		return alerts[i].message < alerts[j].message
+	})
+	return alerts
+}
+
 func latestPollOrSampleTime(statuses map[string]accountPollStatus, samples []store.Sample) time.Time {
 	latest := latestSampleTime(samples)
 	for _, status := range statuses {
@@ -321,6 +394,38 @@ func latestPollOrSampleTime(statuses map[string]accountPollStatus, samples []sto
 		}
 	}
 	return latest
+}
+
+func formatProjectedPercent(percent float64) string {
+	if percent > 999 {
+		return ">999%"
+	}
+	return fmt.Sprintf("%.0f%%", percent)
+}
+
+func latestSuccessTime(statuses map[string]accountPollStatus, samples []store.Sample) time.Time {
+	latest := latestSampleTime(samples)
+	for _, status := range statuses {
+		if status.latestSuccess.After(latest) {
+			latest = status.latestSuccess
+		}
+	}
+	return latest
+}
+
+func latestKnownSuccess(status accountPollStatus) time.Time {
+	if status.latestSuccess.After(status.latestSampleAt) {
+		return status.latestSuccess
+	}
+	return status.latestSampleAt
+}
+
+func currentPollFailure(status accountPollStatus) bool {
+	if !status.hasRun || status.run.Status != "error" {
+		return false
+	}
+	success := latestKnownSuccess(status)
+	return success.IsZero() || status.run.StartedAt.After(success)
 }
 
 func latestSampleTime(samples []store.Sample) time.Time {
@@ -438,6 +543,26 @@ func accountKey(providerName, accountID string) string {
 	return providerName + "/" + accountID
 }
 
+func renderAlerts(st styles, alerts []alert) string {
+	level := 0
+	lines := make([]string, 0, len(alerts))
+	for _, alert := range alerts {
+		level = max(level, alert.level)
+		style := st.warn
+		prefix := "warn"
+		if alert.level >= 2 {
+			style = st.bad
+			prefix = "error"
+		}
+		lines = append(lines, style.Render(prefix)+st.subtle.Render("  ")+alert.message)
+	}
+	panel := st.panelWarn
+	if level >= 2 {
+		panel = st.panelBad
+	}
+	return panel.Render(st.heading.Render("Alerts") + "\n" + strings.Join(lines, "\n"))
+}
+
 func renderBar(st styles, percent float64, projected *float64, color lipgloss.Style) string {
 	const width = 24
 	if percent < 0 {
@@ -521,7 +646,7 @@ func renderInlineForecast(st styles, row forecastRow, sample store.Sample, now t
 	parts := []string{rateStyle.Render(fmt.Sprintf("%.1f%%/h", *row.Result.BurnRatePercentPerHour))}
 	if row.Result.ProjectedResetPercent != nil {
 		projected := *row.Result.ProjectedResetPercent
-		parts = append(parts, forecastValueStyle(st, projected).Render(fmt.Sprintf("reset ~%.0f%%", projected)))
+		parts = append(parts, forecastValueStyle(st, projected).Render("reset ~"+formatProjectedPercent(projected)))
 	}
 	if row.Result.Estimated100At != nil {
 		if sample.ResetAt != nil && row.Result.Estimated100At.After(*sample.ResetAt) {
