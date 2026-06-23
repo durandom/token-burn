@@ -28,7 +28,6 @@ type Model struct {
 	samples   []store.Sample
 	forecasts []forecastRow
 	statuses  map[string]accountPollStatus
-	alerts    []alert
 	errors    []string
 }
 
@@ -37,7 +36,6 @@ type refreshMsg struct {
 	samples   []store.Sample
 	forecasts []forecastRow
 	statuses  map[string]accountPollStatus
-	alerts    []alert
 	errors    []string
 	lastPoll  time.Time
 	lastGood  time.Time
@@ -48,11 +46,6 @@ type accountPollStatus struct {
 	hasRun         bool
 	latestSuccess  time.Time
 	latestSampleAt time.Time
-}
-
-type alert struct {
-	level   int
-	message string
 }
 
 type forecastRow struct {
@@ -101,7 +94,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.samples = msg.samples
 		m.forecasts = msg.forecasts
 		m.statuses = msg.statuses
-		m.alerts = msg.alerts
 		m.errors = msg.errors
 		m.lastPoll = msg.lastPoll
 		m.lastGood = msg.lastGood
@@ -134,8 +126,8 @@ func (m Model) View() string {
 	b.WriteString(st.subtle.Render("q quit  r refresh  auto-refresh 60s"))
 	b.WriteString("\n\n")
 
-	if len(m.alerts) > 0 {
-		b.WriteString(renderAlerts(st, m.alerts))
+	if len(m.errors) > 0 {
+		b.WriteString(st.panelBad.Render(st.heading.Render("Errors") + "\n" + strings.Join(m.errors, "\n")))
 		b.WriteString("\n\n")
 	}
 
@@ -298,12 +290,10 @@ func (m Model) refresh() tea.Cmd {
 			}
 		}
 		forecasts := buildForecastRows(ctx, db, samples, now)
-		alerts := buildAlerts(pollStatus, samples, forecasts, errors, now)
 		return refreshMsg{
 			samples:   samples,
 			forecasts: forecasts,
 			statuses:  pollStatus,
-			alerts:    alerts,
 			errors:    errors,
 			lastPoll:  latestPollOrSampleTime(pollStatus, samples),
 			lastGood:  latestSuccessTime(pollStatus, samples),
@@ -357,33 +347,6 @@ func pollStatusErrors(statuses map[string]accountPollStatus) []string {
 		errors = append(errors, fmt.Sprintf("%s latest poll failed: %s", key, message))
 	}
 	return errors
-}
-
-func buildAlerts(statuses map[string]accountPollStatus, samples []store.Sample, _ []forecastRow, errors []string, now time.Time) []alert {
-	var alerts []alert
-	for _, err := range errors {
-		if strings.TrimSpace(err) != "" {
-			alerts = append(alerts, alert{level: 2, message: err})
-		}
-	}
-	for _, message := range pollStatusErrors(statuses) {
-		alerts = append(alerts, alert{level: 2, message: message})
-	}
-
-	for _, sample := range samples {
-		label := accountKey(sample.Provider, sample.AccountID) + " " + displayWindowName(sample.WindowName)
-		if stale := staleSampleLabel(sample, now); stale != "" {
-			alerts = append(alerts, alert{level: 1, message: label + " " + stale})
-		}
-	}
-
-	sort.SliceStable(alerts, func(i, j int) bool {
-		if alerts[i].level != alerts[j].level {
-			return alerts[i].level > alerts[j].level
-		}
-		return alerts[i].message < alerts[j].message
-	})
-	return alerts
 }
 
 func latestPollOrSampleTime(statuses map[string]accountPollStatus, samples []store.Sample) time.Time {
@@ -541,26 +504,6 @@ func renderDetail(st styles, reset string, forecastRow *forecastRow, sample stor
 
 func accountKey(providerName, accountID string) string {
 	return providerName + "/" + accountID
-}
-
-func renderAlerts(st styles, alerts []alert) string {
-	level := 0
-	lines := make([]string, 0, len(alerts))
-	for _, alert := range alerts {
-		level = max(level, alert.level)
-		style := st.warn
-		prefix := "warn"
-		if alert.level >= 2 {
-			style = st.bad
-			prefix = "error"
-		}
-		lines = append(lines, style.Render(prefix)+st.subtle.Render("  ")+alert.message)
-	}
-	panel := st.panelWarn
-	if level >= 2 {
-		panel = st.panelBad
-	}
-	return panel.Render(st.heading.Render("Alerts") + "\n" + strings.Join(lines, "\n"))
 }
 
 func renderBar(st styles, percent float64, projected *float64, color lipgloss.Style) string {
