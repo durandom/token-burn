@@ -198,14 +198,20 @@ func TestRenderAccountHealth(t *testing.T) {
 	model := NewModel(testConfig(t))
 	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
 	line := renderAccountHealth(model.styles, accountPollStatus{
-		hasRun: true,
+		hasRun:        true,
+		latestSuccess: now.Add(-2 * time.Hour),
 		run: store.PollRun{
-			StartedAt: now.Add(-5 * time.Minute),
-			Status:    "error",
+			StartedAt:    now.Add(-5 * time.Minute),
+			Provider:     "antigravity",
+			Status:       "error",
+			ErrorCode:    "auth_expired",
+			ErrorMessage: "antigravity: auth_expired",
 		},
 	}, now)
-	if !strings.Contains(line, "poll failed 5m ago") {
-		t.Fatalf("health missing failed status: %q", line)
+	for _, want := range []string{"auth expired", "last success 2h ago", "run: agy models"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("health missing %q: %q", want, line)
+		}
 	}
 	line = renderAccountHealth(model.styles, accountPollStatus{latestSuccess: now.Add(-2 * time.Minute)}, now)
 	if !strings.Contains(line, "ok 2m ago") {
@@ -259,7 +265,7 @@ func TestRenderUsageLineIncludesInlineForecastReason(t *testing.T) {
 			SampleCount:            1,
 			InsufficientDataReason: "one_sample",
 		},
-	}, time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC))
+	}, time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC), model.staleAfter)
 	for _, want := range []string{"five hour", "12.0%", "need another sample", "█"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q:\n%s", want, line)
@@ -274,7 +280,7 @@ func TestRenderUsageLineTruncatesLongAdditionalNames(t *testing.T) {
 		AccountID:   "codex-default",
 		WindowName:  "additional_codex_bengalfox_secondary",
 		UsedPercent: 0,
-	}, nil, time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC))
+	}, nil, time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC), model.staleAfter)
 	if strings.Contains(line, "additional_codex") {
 		t.Fatalf("line should hide internal prefix:\n%s", line)
 	}
@@ -313,7 +319,7 @@ func TestRenderUsageLineShowsRelativeResetAndResetFirst(t *testing.T) {
 			ProjectedResetPercent:  &projectedReset,
 			Estimated100At:         &estimated100,
 		},
-	}, now)
+	}, now, model.staleAfter)
 
 	for _, want := range []string{"resets in 1h 30m", "20.0%/h", "reset ~80%", "reset first", "▒"} {
 		if !strings.Contains(line, want) {
@@ -325,15 +331,50 @@ func TestRenderUsageLineShowsRelativeResetAndResetFirst(t *testing.T) {
 func TestRenderUsageLineShowsStaleSample(t *testing.T) {
 	model := NewModel(testConfig(t))
 	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	reset := now.Add(-time.Hour)
+	burn := 5.0
+	projected := 42.0
 	line := renderUsageLine(model.styles, store.Sample{
 		Provider:    "antigravity",
 		AccountID:   "antigravity-default",
 		WindowName:  "gemini",
 		ObservedAt:  now.Add(-3 * time.Hour),
 		UsedPercent: 40.5,
-	}, nil, now)
-	if !strings.Contains(line, "stale 3h ago") {
-		t.Fatalf("line missing stale marker:\n%s", line)
+		ResetAt:     &reset,
+	}, &forecastRow{
+		Provider: "antigravity",
+		Account:  "antigravity-default",
+		Window:   "gemini",
+		Result: forecast.Result{
+			SampleCount:            3,
+			BurnRatePercentPerHour: &burn,
+			ProjectedResetPercent:  &projected,
+		},
+	}, now, model.staleAfter)
+	for _, want := range []string{"stale 3h ago", "reset expired"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("line missing %q:\n%s", want, line)
+		}
+	}
+	for _, unwanted := range []string{"5.0%/h", "reset ~42%", "resets 1h ago"} {
+		if strings.Contains(line, unwanted) {
+			t.Fatalf("stale line should hide %q:\n%s", unwanted, line)
+		}
+	}
+}
+
+func TestRenderUsageLineDoesNotShowNormalPollDelayAsStale(t *testing.T) {
+	model := NewModel(testConfig(t))
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	line := renderUsageLine(model.styles, store.Sample{
+		Provider:    "claude",
+		AccountID:   "claude-default",
+		WindowName:  "five_hour",
+		ObservedAt:  now.Add(-6 * time.Minute),
+		UsedPercent: 6,
+	}, nil, now, model.staleAfter)
+	if strings.Contains(line, "stale") {
+		t.Fatalf("line should not mark normal poll delay stale:\n%s", line)
 	}
 }
 
@@ -361,7 +402,7 @@ func TestRenderUsageLineShowsProjectedResetOvershoot(t *testing.T) {
 			ProjectedResetPercent:  &projectedReset,
 			Estimated100At:         &estimated100,
 		},
-	}, now)
+	}, now, model.staleAfter)
 
 	for _, want := range []string{"ai credits", "37.2%", "45.0%/h", "reset ~127%", "100% in 1h"} {
 		if !strings.Contains(line, want) {

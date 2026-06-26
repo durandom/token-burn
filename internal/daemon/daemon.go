@@ -78,7 +78,7 @@ func Run(ctx context.Context, opts Options) error {
 		if err != nil {
 			return err
 		}
-		delay := backoff.NextDelay(len(result.Errors) > 0)
+		delay := backoff.NextDelay(shouldBackoff(result))
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -87,6 +87,10 @@ func Run(ctx context.Context, opts Options) error {
 		case <-timer.C:
 		}
 	}
+}
+
+func shouldBackoff(result PollResult) bool {
+	return len(result.Errors) > 0 && len(result.Snapshots) == 0
 }
 
 func (b *Backoff) NextDelay(failed bool) time.Duration {

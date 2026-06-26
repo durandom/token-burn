@@ -116,6 +116,13 @@ func LaunchAgentPlist(spec Spec) ([]byte, error) {
 		buf.WriteString("</string>\n")
 	}
 	buf.WriteString("  </array>\n")
+	buf.WriteString("  <key>EnvironmentVariables</key>\n")
+	buf.WriteString("  <dict>\n")
+	writeKeyString(&buf, "PATH", launchAgentPathEnv(spec.BinaryPath))
+	for _, item := range launchAgentHomeEnvironment() {
+		writeKeyString(&buf, item.key, item.value)
+	}
+	buf.WriteString("  </dict>\n")
 	writeKeyBool(&buf, "RunAtLoad", true)
 	writeKeyBool(&buf, "KeepAlive", true)
 	writeKeyString(&buf, "StandardOutPath", spec.LogPath)
@@ -123,6 +130,45 @@ func LaunchAgentPlist(spec Spec) ([]byte, error) {
 	buf.WriteString("</dict>\n")
 	buf.WriteString("</plist>\n")
 	return buf.Bytes(), nil
+}
+
+func launchAgentPathEnv(binaryPath string) string {
+	dirs := []string{
+		filepath.Dir(binaryPath),
+		"/opt/homebrew/bin",
+		"/usr/local/bin",
+		"/usr/bin",
+		"/bin",
+		"/usr/sbin",
+		"/sbin",
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" || dir == "." || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		out = append(out, dir)
+	}
+	return strings.Join(out, ":")
+}
+
+type launchAgentEnvVar struct {
+	key   string
+	value string
+}
+
+func launchAgentHomeEnvironment() []launchAgentEnvVar {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return []launchAgentEnvVar{
+			{key: "HOME", value: home},
+			{key: "XDG_CONFIG_HOME", value: filepath.Join(home, ".config")},
+			{key: "XDG_STATE_HOME", value: filepath.Join(home, ".local", "state")},
+		}
+	}
+	return nil
 }
 
 func installLaunchAgent(ctx context.Context, spec Spec) error {

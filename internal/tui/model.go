@@ -17,18 +17,19 @@ import (
 const refreshInterval = 60 * time.Second
 
 type Model struct {
-	cfg       config.Config
-	theme     Theme
-	styles    styles
-	width     int
-	height    int
-	lastPoll  time.Time
-	lastGood  time.Time
-	loading   bool
-	samples   []store.Sample
-	forecasts []forecastRow
-	statuses  map[string]accountPollStatus
-	errors    []string
+	cfg        config.Config
+	theme      Theme
+	styles     styles
+	width      int
+	height     int
+	staleAfter time.Duration
+	lastPoll   time.Time
+	lastGood   time.Time
+	loading    bool
+	samples    []store.Sample
+	forecasts  []forecastRow
+	statuses   map[string]accountPollStatus
+	errors     []string
 }
 
 type tickMsg struct{}
@@ -61,10 +62,11 @@ func NewModel(cfg config.Config) Model {
 	}
 	theme := DefaultTheme()
 	return Model{
-		cfg:     cfg,
-		theme:   theme,
-		styles:  newStyles(theme),
-		loading: true,
+		cfg:        cfg,
+		theme:      theme,
+		styles:     newStyles(theme),
+		staleAfter: staleSampleThreshold(cfg.PollInterval),
+		loading:    true,
 	}
 }
 
@@ -167,9 +169,9 @@ func (m Model) renderUsage() string {
 		for _, row := range rows {
 			forecastRow, ok := forecasts[forecastKey(row.Provider, row.AccountID, row.WindowName)]
 			if !ok {
-				b.WriteString(renderUsageLine(m.styles, row, nil, now))
+				b.WriteString(renderUsageLine(m.styles, row, nil, now, m.staleAfter))
 			} else {
-				b.WriteString(renderUsageLine(m.styles, row, &forecastRow, now))
+				b.WriteString(renderUsageLine(m.styles, row, &forecastRow, now, m.staleAfter))
 			}
 			b.WriteString("\n")
 		}
@@ -238,7 +240,7 @@ func riskLevel(percent float64) int {
 
 func renderAccountHealth(st styles, status accountPollStatus, now time.Time) string {
 	if currentPollFailure(status) {
-		return st.bad.Render("  poll failed " + formatRelativeTime(status.run.StartedAt, now))
+		return st.bad.Render("  " + pollFailureSummary(status, now))
 	}
 	if !status.latestSuccess.IsZero() {
 		return st.good.Render("  ok " + formatRelativeTime(status.latestSuccess, now))
@@ -247,6 +249,57 @@ func renderAccountHealth(st styles, status accountPollStatus, now time.Time) str
 		return st.warn.Render("  sample " + formatRelativeTime(status.latestSampleAt, now))
 	}
 	return st.subtle.Render("  no poll yet")
+}
+
+func pollFailureSummary(status accountPollStatus, now time.Time) string {
+	parts := []string{pollFailureReason(status.run)}
+	if !status.latestSuccess.IsZero() {
+		parts = append(parts, "last success "+formatRelativeTime(status.latestSuccess, now))
+	} else if !status.latestSampleAt.IsZero() {
+		parts = append(parts, "sample "+formatRelativeTime(status.latestSampleAt, now))
+	} else {
+		parts = append(parts, "no successful refresh")
+	}
+	if action := pollFailureAction(status.run); action != "" {
+		parts = append(parts, action)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func pollFailureReason(run store.PollRun) string {
+	code := strings.TrimSpace(run.ErrorCode)
+	message := strings.ToLower(run.ErrorMessage)
+	switch code {
+	case "auth_expired":
+		return "auth expired"
+	case "auth_missing":
+		return "auth missing"
+	case "rate_limited":
+		return "rate limited"
+	case "transient_http_failure":
+		if strings.Contains(message, "no such host") || strings.Contains(message, "bad file descriptor") || strings.Contains(message, "dial tcp") {
+			return "network error"
+		}
+		return "http error"
+	case "invalid_response":
+		return "invalid response"
+	}
+	if code != "" {
+		return strings.ReplaceAll(code, "_", " ")
+	}
+	return "poll failed"
+}
+
+func pollFailureAction(run store.PollRun) string {
+	provider := strings.ToLower(strings.TrimSpace(run.Provider))
+	code := strings.TrimSpace(run.ErrorCode)
+	switch {
+	case provider == "antigravity" && code == "auth_expired":
+		return "run: agy models"
+	case provider == "copilot" && code == "auth_missing":
+		return "check: gh auth status"
+	}
+	return ""
 }
 
 func (m Model) refresh() tea.Cmd {
@@ -441,7 +494,7 @@ func tickAfter(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
-func renderUsageLine(st styles, sample store.Sample, forecastRow *forecastRow, now time.Time) string {
+func renderUsageLine(st styles, sample store.Sample, forecastRow *forecastRow, now time.Time, staleAfter time.Duration) string {
 	color := st.good
 	switch {
 	case sample.UsedPercent >= 90:
@@ -453,12 +506,21 @@ func renderUsageLine(st styles, sample store.Sample, forecastRow *forecastRow, n
 	if sample.ResetAt != nil {
 		reset = "resets " + formatRelativeTime(*sample.ResetAt, now)
 	}
-	detail := renderDetail(st, reset, forecastRow, sample, now)
-	if stale := staleSampleLabel(sample, now); stale != "" {
+	stale := staleSampleLabel(sample, now, staleAfter)
+	expired := resetExpiredLabel(sample, now)
+	detail := renderDetail(st, reset, forecastRow, sample, now, stale != "" || expired != "")
+	if stale := staleSampleLabel(sample, now, staleAfter); stale != "" {
 		if detail == "" {
 			detail = st.warn.Render(stale)
 		} else {
 			detail = st.warn.Render(stale) + st.subtle.Render(" · ") + detail
+		}
+	}
+	if expired != "" {
+		if detail == "" {
+			detail = st.warn.Render(expired)
+		} else {
+			detail = detail + st.subtle.Render(" · ") + st.warn.Render(expired)
 		}
 	}
 	name := fmt.Sprintf("%-28s", truncateCell(displayWindowName(sample.WindowName), 28))
@@ -471,28 +533,41 @@ func renderUsageLine(st styles, sample store.Sample, forecastRow *forecastRow, n
 	)
 }
 
-func staleSampleLabel(sample store.Sample, now time.Time) string {
+func staleSampleLabel(sample store.Sample, now time.Time, staleAfter time.Duration) string {
 	if sample.ObservedAt.IsZero() {
 		return ""
 	}
-	if now.Sub(sample.ObservedAt) <= staleSampleThreshold() {
+	if now.Sub(sample.ObservedAt) <= staleAfter {
 		return ""
 	}
 	return "stale " + formatRelativeTime(sample.ObservedAt, now)
 }
 
-func staleSampleThreshold() time.Duration {
-	threshold := 2 * refreshInterval
-	if threshold < 3*time.Minute {
-		return 3 * time.Minute
+func resetExpiredLabel(sample store.Sample, now time.Time) string {
+	if sample.ResetAt == nil || sample.ResetAt.After(now) {
+		return ""
+	}
+	return "reset expired"
+}
+
+func staleSampleThreshold(pollInterval time.Duration) time.Duration {
+	if pollInterval <= 0 {
+		pollInterval = config.DefaultPollInterval
+	}
+	threshold := 3 * pollInterval
+	if threshold < 15*time.Minute {
+		return 15 * time.Minute
 	}
 	return threshold
 }
 
-func renderDetail(st styles, reset string, forecastRow *forecastRow, sample store.Sample, now time.Time) string {
+func renderDetail(st styles, reset string, forecastRow *forecastRow, sample store.Sample, now time.Time, suppressForecast bool) string {
 	var parts []string
-	if reset != "" {
+	if reset != "" && !suppressForecast {
 		parts = append(parts, st.subtle.Render(reset))
+	}
+	if suppressForecast {
+		return strings.Join(parts, st.subtle.Render(" · "))
 	}
 	if forecastRow == nil {
 		parts = append(parts, st.subtle.Render("need history"))

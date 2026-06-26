@@ -231,6 +231,25 @@ func TestBackoffDefaults(t *testing.T) {
 	}
 }
 
+func TestShouldBackoffOnlyWhenWholePollFails(t *testing.T) {
+	if shouldBackoff(PollResult{
+		Snapshots: []usageprovider.Snapshot{{Provider: "claude"}},
+		Errors:    []PollError{{Provider: "antigravity"}},
+	}) {
+		t.Fatal("mixed success and failure should not back off the whole daemon")
+	}
+	if !shouldBackoff(PollResult{
+		Errors: []PollError{{Provider: "claude"}},
+	}) {
+		t.Fatal("all-failed poll should back off")
+	}
+	if shouldBackoff(PollResult{
+		Snapshots: []usageprovider.Snapshot{{Provider: "claude"}},
+	}) {
+		t.Fatal("successful poll should not back off")
+	}
+}
+
 func contains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
