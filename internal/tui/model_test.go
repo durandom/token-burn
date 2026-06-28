@@ -43,7 +43,7 @@ func TestViewRendersSamples(t *testing.T) {
 	model.lastGood = model.lastPoll
 
 	view := model.View()
-	for _, want := range []string{"token-burn", "last success", "copilot/copilot-default  individual max", "five hour", "12.0%", "[", "█", "▒", "10.0%/h", "reset ~50%", "100% in"} {
+	for _, want := range []string{"token-burn", "auto-refresh 5m", "last success", "copilot/copilot-default  individual max", "five hour", "12.0%", "[", "█", "▒", "10.0%/h", "reset ~50%", "100% in"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}

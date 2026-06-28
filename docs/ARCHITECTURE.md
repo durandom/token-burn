@@ -150,7 +150,7 @@ authentication delegated to each provider's normal local auth artifacts.
 Default TOML shape:
 
 ```toml
-poll_interval = "60s"
+poll_interval = "5m"
 http_timeout = "15s"
 database_path = "/home/alice/.local/state/token-burn/token-burn.db"
 

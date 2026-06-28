@@ -147,7 +147,7 @@ The TUI is intentionally compact.
 
 ```text
 token-burn  last poll 14:03:55
-q quit  r refresh  auto-refresh 60s
+q quit  r refresh  auto-refresh 5m
 
 antigravity/antigravity-default
   claude and gpt   [────────────────────────]   0.0%
@@ -221,7 +221,7 @@ Logs:     ${XDG_STATE_HOME:-~/.local/state}/token-burn/token-burn.log
 Default config:
 
 ```toml
-poll_interval = "60s"
+poll_interval = "5m"
 http_timeout = "15s"
 database_path = "/home/alice/.local/state/token-burn/token-burn.db"
 

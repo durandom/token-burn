@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	DefaultPollInterval = 60 * time.Second
+	DefaultPollInterval = 5 * time.Minute
 	DefaultHTTPTimeout  = 15 * time.Second
 	appDir              = "token-burn"
 	configFile          = "config.toml"
@@ -199,7 +199,7 @@ func ExpandPath(path string) (string, error) {
 }
 
 func defaultFileContents() string {
-	return fmt.Sprintf(`poll_interval = "60s"
+	return fmt.Sprintf(`poll_interval = "5m"
 http_timeout = "15s"
 database_path = %q
 

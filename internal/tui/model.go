@@ -126,7 +126,7 @@ func (m Model) View() string {
 		b.WriteString(st.subtle.Render(" · no successful refresh yet"))
 	}
 	b.WriteString("\n")
-	b.WriteString(st.subtle.Render("q quit  r refresh  auto-refresh 60s"))
+	b.WriteString(st.subtle.Render("q quit  r refresh  auto-refresh " + formatDuration(m.cfg.PollInterval)))
 	b.WriteString("\n\n")
 
 	if len(m.errors) > 0 {
@@ -795,6 +795,22 @@ func formatRelativeTime(target, now time.Time) string {
 		return value + " ago"
 	}
 	return prefix + value
+}
+
+func formatDuration(value time.Duration) string {
+	if value <= 0 {
+		value = config.DefaultPollInterval
+	}
+	if value%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int(value/time.Hour))
+	}
+	if value%time.Minute == 0 {
+		return fmt.Sprintf("%dm", int(value/time.Minute))
+	}
+	if value%time.Second == 0 {
+		return fmt.Sprintf("%ds", int(value/time.Second))
+	}
+	return value.String()
 }
 
 func truncateCell(value string, width int) string {
