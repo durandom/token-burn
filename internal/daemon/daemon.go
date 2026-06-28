@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/durandom/token-burn/internal/config"
@@ -19,10 +22,12 @@ import (
 )
 
 type Options struct {
-	Config    config.Config
-	Providers map[string]usageprovider.Provider
-	Recorder  otel.Recorder
-	Now       func() time.Time
+	Config                 config.Config
+	Providers              map[string]usageprovider.Provider
+	Recorder               otel.Recorder
+	Now                    func() time.Time
+	CommandRunner          CommandRunner
+	CredentialRefreshState *CredentialRefreshState
 }
 
 type Backoff struct {
@@ -44,9 +49,22 @@ type PollError struct {
 	Err        error
 }
 
+type CommandRunner interface {
+	Run(ctx context.Context, name string, args ...string) error
+}
+
+type execCommandRunner struct{}
+
+type CredentialRefreshState struct {
+	mu      sync.Mutex
+	lastRun map[string]time.Time
+}
+
 const (
 	minRateLimitCooldown = 5 * time.Minute
 	maxRateLimitCooldown = time.Hour
+	authRefreshCooldown  = 30 * time.Minute
+	authRefreshTimeout   = 2 * time.Minute
 )
 
 func Run(ctx context.Context, opts Options) error {
@@ -75,6 +93,9 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	if opts.Recorder != nil {
 		recorder = opts.Recorder
+	}
+	if opts.CredentialRefreshState == nil {
+		opts.CredentialRefreshState = &CredentialRefreshState{}
 	}
 
 	backoff := Backoff{Base: opts.Config.PollInterval, Max: 15 * time.Minute}
@@ -158,6 +179,33 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 		})
 		if err != nil {
 			pollErr := pollErrorFrom(acct.Provider, acct.ID, err)
+			if shouldAttemptCredentialRefresh(opts, pollErr, startedAt) {
+				markCredentialRefreshAttempt(opts, pollErr, startedAt)
+				if refreshErr := refreshCredentials(ctx, opts, pollErr); refreshErr == nil {
+					snap, err = client.Fetch(ctx, usageprovider.Account{
+						Provider:          acct.Provider,
+						ID:                acct.ID,
+						ProviderAccountID: acct.ProviderAccountID,
+						AuthFile:          acct.AuthFile,
+						CredentialsFile:   acct.CredentialsFile,
+					})
+					if err == nil {
+						if err := db.InsertSnapshot(ctx, snap, store.InsertOptions{}); err != nil {
+							return result, err
+						}
+						if err := recordPollSuccess(ctx, db, snap.Provider, snap.AccountID, startedAt, opts.now()); err != nil {
+							return result, err
+						}
+						result.Snapshots = append(result.Snapshots, snap)
+						if opts.Recorder != nil {
+							otel.EmitSnapshot(ctx, opts.Recorder, snap, now)
+							emitForecasts(ctx, opts.Recorder, db, snap, now)
+						}
+						continue
+					}
+					pollErr = pollErrorFrom(acct.Provider, acct.ID, err)
+				}
+			}
 			result.Errors = append(result.Errors, pollErr)
 			if err := recordPollError(ctx, db, pollErr, startedAt, opts.now()); err != nil {
 				return result, err
@@ -180,6 +228,51 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 		}
 	}
 	return result, nil
+}
+
+func shouldAttemptCredentialRefresh(opts Options, pollErr PollError, now time.Time) bool {
+	if strings.ToLower(strings.TrimSpace(pollErr.Provider)) != "antigravity" {
+		return false
+	}
+	if pollErr.Code != string(usageprovider.ErrAuthExpired) {
+		return false
+	}
+	if opts.CredentialRefreshState == nil {
+		return false
+	}
+	key := credentialRefreshKey(pollErr)
+	opts.CredentialRefreshState.mu.Lock()
+	defer opts.CredentialRefreshState.mu.Unlock()
+	lastRun := opts.CredentialRefreshState.lastRun[key]
+	return lastRun.IsZero() || now.Sub(lastRun) >= authRefreshCooldown
+}
+
+func markCredentialRefreshAttempt(opts Options, pollErr PollError, now time.Time) {
+	if opts.CredentialRefreshState == nil {
+		return
+	}
+	key := credentialRefreshKey(pollErr)
+	opts.CredentialRefreshState.mu.Lock()
+	defer opts.CredentialRefreshState.mu.Unlock()
+	if opts.CredentialRefreshState.lastRun == nil {
+		opts.CredentialRefreshState.lastRun = map[string]time.Time{}
+	}
+	opts.CredentialRefreshState.lastRun[key] = now
+}
+
+func credentialRefreshKey(pollErr PollError) string {
+	return strings.ToLower(strings.TrimSpace(pollErr.Provider)) + "/" + strings.TrimSpace(pollErr.AccountID)
+}
+
+func refreshCredentials(ctx context.Context, opts Options, pollErr PollError) error {
+	switch strings.ToLower(strings.TrimSpace(pollErr.Provider)) {
+	case "antigravity":
+		refreshCtx, cancel := context.WithTimeout(ctx, authRefreshTimeout)
+		defer cancel()
+		return opts.commandRunner().Run(refreshCtx, "agy", "models")
+	default:
+		return nil
+	}
 }
 
 func providerRateLimitBaseCooldown(pollInterval time.Duration) time.Duration {
@@ -325,6 +418,42 @@ func (o Options) now() time.Time {
 func (o Options) withRecorder(recorder otel.Recorder) Options {
 	o.Recorder = recorder
 	return o
+}
+
+func (o Options) commandRunner() CommandRunner {
+	if o.CommandRunner != nil {
+		return o.CommandRunner
+	}
+	return execCommandRunner{}
+}
+
+func (execCommandRunner) Run(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, resolveExecutable(name), args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(out))
+		if message != "" {
+			return fmt.Errorf("%w: %s", err, message)
+		}
+		return err
+	}
+	return nil
+}
+
+func resolveExecutable(name string) string {
+	if path, err := exec.LookPath(name); err == nil {
+		return path
+	}
+	if name != "agy" {
+		return name
+	}
+	for _, candidate := range []string{"/opt/homebrew/bin/agy", "/usr/local/bin/agy", "/usr/bin/agy"} {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return name
 }
 
 func pollErrorFrom(providerName, accountID string, err error) PollError {

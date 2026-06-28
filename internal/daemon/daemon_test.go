@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +55,42 @@ func (c *countingProvider) Fetch(ctx context.Context, acct usageprovider.Account
 		ObservedAt: time.Now().UTC(),
 		Windows:    []usageprovider.Window{{Name: "five_hour", UsedPercent: 7}},
 	}, nil
+}
+
+type sequenceProvider struct {
+	id    string
+	calls int
+	errs  []error
+	snaps []usageprovider.Snapshot
+}
+
+func (s *sequenceProvider) ID() string { return s.id }
+
+func (s *sequenceProvider) Fetch(ctx context.Context, acct usageprovider.Account) (usageprovider.Snapshot, error) {
+	call := s.calls
+	s.calls++
+	if call < len(s.errs) && s.errs[call] != nil {
+		return usageprovider.Snapshot{}, s.errs[call]
+	}
+	if call < len(s.snaps) {
+		return s.snaps[call], nil
+	}
+	return usageprovider.Snapshot{
+		Provider:   acct.Provider,
+		AccountID:  acct.ID,
+		ObservedAt: time.Now().UTC(),
+		Windows:    []usageprovider.Window{{Name: "gemini", UsedPercent: 0}},
+	}, nil
+}
+
+type fakeCommandRunner struct {
+	calls []string
+	err   error
+}
+
+func (f *fakeCommandRunner) Run(ctx context.Context, name string, args ...string) error {
+	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	return f.err
 }
 
 func TestPollOnceStoresSnapshotAndEmitsMetrics(t *testing.T) {
@@ -150,6 +187,101 @@ func TestPollOnceSkipsRecentlyRateLimitedAccount(t *testing.T) {
 	}
 	if len(result.Errors) != 0 || len(result.Snapshots) != 0 {
 		t.Fatalf("result = %#v, want skipped account with no new result", result)
+	}
+}
+
+func TestPollOnceRefreshesAntigravityCredentialsAndRetries(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/token-burn.db")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	provider := &sequenceProvider{
+		id: "antigravity",
+		errs: []error{
+			&usageprovider.Error{Code: usageprovider.ErrAuthExpired, Provider: "antigravity"},
+			nil,
+		},
+		snaps: []usageprovider.Snapshot{
+			{},
+			{
+				Provider:   "antigravity",
+				AccountID:  "antigravity-default",
+				ObservedAt: now,
+				Windows:    []usageprovider.Window{{Name: "gemini", UsedPercent: 0}},
+			},
+		},
+	}
+	runner := &fakeCommandRunner{}
+	result, err := PollOnce(ctx, db, Options{
+		Config: config.Config{
+			Accounts: []config.Account{{Provider: "antigravity", ID: "antigravity-default"}},
+		},
+		Providers:              map[string]usageprovider.Provider{"antigravity": provider},
+		CommandRunner:          runner,
+		CredentialRefreshState: &CredentialRefreshState{},
+		Now:                    func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	if provider.calls != 2 {
+		t.Fatalf("Fetch calls = %d, want 2", provider.calls)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != "agy models" {
+		t.Fatalf("runner calls = %#v, want agy models", runner.calls)
+	}
+	if len(result.Errors) != 0 || len(result.Snapshots) != 1 {
+		t.Fatalf("result = %#v, want one retried snapshot and no errors", result)
+	}
+	runs, err := db.PollRuns(ctx, store.PollRunFilter{Provider: "antigravity", AccountID: "antigravity-default"})
+	if err != nil {
+		t.Fatalf("PollRuns() error = %v", err)
+	}
+	if len(runs) != 1 || runs[0].Status != "success" {
+		t.Fatalf("poll runs = %#v, want one success", runs)
+	}
+}
+
+func TestPollOnceThrottlesAntigravityCredentialRefresh(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/token-burn.db")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	provider := &sequenceProvider{
+		id:   "antigravity",
+		errs: []error{&usageprovider.Error{Code: usageprovider.ErrAuthExpired, Provider: "antigravity"}},
+	}
+	runner := &fakeCommandRunner{}
+	state := &CredentialRefreshState{}
+	markCredentialRefreshAttempt(Options{CredentialRefreshState: state}, PollError{
+		Provider:  "antigravity",
+		AccountID: "antigravity-default",
+	}, now.Add(-time.Minute))
+	result, err := PollOnce(ctx, db, Options{
+		Config: config.Config{
+			Accounts: []config.Account{{Provider: "antigravity", ID: "antigravity-default"}},
+		},
+		Providers:              map[string]usageprovider.Provider{"antigravity": provider},
+		CommandRunner:          runner,
+		CredentialRefreshState: state,
+		Now:                    func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %#v, want no refresh inside cooldown", runner.calls)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("errors = %d, want 1", len(result.Errors))
 	}
 }
 
