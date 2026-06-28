@@ -44,6 +44,11 @@ type PollError struct {
 	Err        error
 }
 
+const (
+	minRateLimitCooldown = 5 * time.Minute
+	maxRateLimitCooldown = time.Hour
+)
+
 func Run(ctx context.Context, opts Options) error {
 	if opts.Config.PollInterval <= 0 {
 		opts.Config.PollInterval = config.DefaultPollInterval
@@ -123,6 +128,13 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 	now := opts.now()
 	for _, acct := range opts.Config.Accounts {
 		startedAt := opts.now()
+		skip, err := shouldSkipRateLimitedAccount(ctx, db, acct.Provider, acct.ID, startedAt, opts.Config.PollInterval)
+		if err != nil {
+			return result, err
+		}
+		if skip {
+			continue
+		}
 		client, ok := opts.providerFor(acct.Provider)
 		if !ok {
 			pollErr := PollError{
@@ -168,6 +180,72 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 		}
 	}
 	return result, nil
+}
+
+func providerRateLimitBaseCooldown(pollInterval time.Duration) time.Duration {
+	if pollInterval <= 0 {
+		pollInterval = config.DefaultPollInterval
+	}
+	cooldown := 3 * pollInterval
+	if cooldown < minRateLimitCooldown {
+		return minRateLimitCooldown
+	}
+	return cooldown
+}
+
+func shouldSkipRateLimitedAccount(ctx context.Context, db *store.Store, providerName, accountID string, now time.Time, pollInterval time.Duration) (bool, error) {
+	if pollInterval <= 0 {
+		pollInterval = config.DefaultPollInterval
+	}
+	baseCooldown := providerRateLimitBaseCooldown(pollInterval)
+	if baseCooldown <= 0 {
+		return false, nil
+	}
+	since := now.Add(-maxRateLimitCooldown)
+	runs, err := db.PollRuns(ctx, store.PollRunFilter{
+		Provider:  providerName,
+		AccountID: accountID,
+		Since:     &since,
+	})
+	if err != nil {
+		return false, err
+	}
+	if len(runs) == 0 {
+		return false, nil
+	}
+	cooldown, latest := rateLimitCooldownForRuns(runs, baseCooldown, maxRateLimitCooldown)
+	if cooldown <= 0 {
+		return false, nil
+	}
+	return now.Sub(latest.StartedAt) < cooldown, nil
+}
+
+func rateLimitCooldownForRuns(runs []store.PollRun, baseCooldown, maxCooldown time.Duration) (time.Duration, store.PollRun) {
+	if len(runs) == 0 || baseCooldown <= 0 {
+		return 0, store.PollRun{}
+	}
+	latest := runs[len(runs)-1]
+	if latest.Status != "error" || latest.ErrorCode != string(usageprovider.ErrRateLimited) {
+		return 0, latest
+	}
+	consecutive := 0
+	for i := len(runs) - 1; i >= 0; i-- {
+		if runs[i].Status != "error" || runs[i].ErrorCode != string(usageprovider.ErrRateLimited) {
+			break
+		}
+		consecutive++
+	}
+	cooldown := baseCooldown
+	for i := 1; i < consecutive; i++ {
+		cooldown *= 2
+		if maxCooldown > 0 && cooldown >= maxCooldown {
+			return maxCooldown, latest
+		}
+	}
+	if maxCooldown > 0 && cooldown > maxCooldown {
+		return maxCooldown, latest
+	}
+	return cooldown, latest
 }
 
 func recordPollSuccess(ctx context.Context, db *store.Store, providerName, accountID string, startedAt, finishedAt time.Time) error {

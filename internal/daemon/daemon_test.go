@@ -40,6 +40,22 @@ func (f *fakeRecorder) AddCounter(ctx context.Context, name string, value int64,
 	f.counters = append(f.counters, name)
 }
 
+type countingProvider struct {
+	calls int
+}
+
+func (c *countingProvider) ID() string { return "claude" }
+
+func (c *countingProvider) Fetch(ctx context.Context, acct usageprovider.Account) (usageprovider.Snapshot, error) {
+	c.calls++
+	return usageprovider.Snapshot{
+		Provider:   acct.Provider,
+		AccountID:  acct.ID,
+		ObservedAt: time.Now().UTC(),
+		Windows:    []usageprovider.Window{{Name: "five_hour", UsedPercent: 7}},
+	}, nil
+}
+
 func TestPollOnceStoresSnapshotAndEmitsMetrics(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, t.TempDir()+"/token-burn.db")
@@ -94,6 +110,69 @@ func TestPollOnceStoresSnapshotAndEmitsMetrics(t *testing.T) {
 	}
 	if !contains(recorder.counters, otel.MetricPollRunsTotal) {
 		t.Fatalf("counters = %v, want poll run counter", recorder.counters)
+	}
+}
+
+func TestPollOnceSkipsRecentlyRateLimitedAccount(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/token-burn.db")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	if err := db.RecordPollRun(ctx, store.PollRun{
+		StartedAt:  now.Add(-time.Minute),
+		Provider:   "claude",
+		AccountID:  "claude-default",
+		Status:     "error",
+		ErrorCode:  string(usageprovider.ErrRateLimited),
+		HTTPStatus: intPtr(429),
+	}); err != nil {
+		t.Fatalf("RecordPollRun() error = %v", err)
+	}
+
+	provider := &countingProvider{}
+	result, err := PollOnce(ctx, db, Options{
+		Config: config.Config{
+			PollInterval: time.Minute,
+			Accounts:     []config.Account{{Provider: "claude", ID: "claude-default"}},
+		},
+		Providers: map[string]usageprovider.Provider{"claude": provider},
+		Now:       func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("Fetch calls = %d, want 0", provider.calls)
+	}
+	if len(result.Errors) != 0 || len(result.Snapshots) != 0 {
+		t.Fatalf("result = %#v, want skipped account with no new result", result)
+	}
+}
+
+func TestRateLimitCooldownForRunsBacksOffExponentially(t *testing.T) {
+	t0 := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	runs := []store.PollRun{
+		{StartedAt: t0.Add(-30 * time.Minute), Status: "success"},
+		{StartedAt: t0.Add(-20 * time.Minute), Status: "error", ErrorCode: string(usageprovider.ErrRateLimited)},
+		{StartedAt: t0.Add(-10 * time.Minute), Status: "error", ErrorCode: string(usageprovider.ErrRateLimited)},
+		{StartedAt: t0.Add(-time.Minute), Status: "error", ErrorCode: string(usageprovider.ErrRateLimited)},
+	}
+	cooldown, latest := rateLimitCooldownForRuns(runs, 5*time.Minute, time.Hour)
+	if cooldown != 20*time.Minute {
+		t.Fatalf("cooldown = %s, want 20m", cooldown)
+	}
+	if !latest.StartedAt.Equal(t0.Add(-time.Minute)) {
+		t.Fatalf("latest = %v, want latest rate-limit run", latest.StartedAt)
+	}
+
+	runs = append(runs, store.PollRun{StartedAt: t0, Status: "success"})
+	cooldown, _ = rateLimitCooldownForRuns(runs, 5*time.Minute, time.Hour)
+	if cooldown != 0 {
+		t.Fatalf("cooldown after success = %s, want 0", cooldown)
 	}
 }
 
@@ -263,4 +342,8 @@ type errString string
 
 func (e errString) Error() string {
 	return string(e)
+}
+
+func intPtr(value int) *int {
+	return &value
 }

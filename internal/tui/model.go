@@ -47,6 +47,7 @@ type accountPollStatus struct {
 	hasRun         bool
 	latestSuccess  time.Time
 	latestSampleAt time.Time
+	recentErrors   int
 }
 
 type forecastRow struct {
@@ -240,7 +241,11 @@ func riskLevel(percent float64) int {
 
 func renderAccountHealth(st styles, status accountPollStatus, now time.Time) string {
 	if currentPollFailure(status) {
-		return st.bad.Render("  " + pollFailureSummary(status, now))
+		style := st.bad
+		if pollFailureSeverity(status, now) < 2 {
+			style = st.warn
+		}
+		return style.Render("  " + pollFailureSummary(status, now))
 	}
 	if !status.latestSuccess.IsZero() {
 		return st.good.Render("  ok " + formatRelativeTime(status.latestSuccess, now))
@@ -252,8 +257,18 @@ func renderAccountHealth(st styles, status accountPollStatus, now time.Time) str
 }
 
 func pollFailureSummary(status accountPollStatus, now time.Time) string {
-	parts := []string{pollFailureReason(status.run)}
-	if !status.latestSuccess.IsZero() {
+	parts := []string{}
+	hasFreshSuccessPrefix := false
+	if pollFailureSeverity(status, now) < 2 && !status.latestSuccess.IsZero() {
+		parts = append(parts, "ok "+formatRelativeTime(status.latestSuccess, now))
+		parts = append(parts, "latest refresh "+pollFailureReason(status.run))
+		hasFreshSuccessPrefix = true
+	} else {
+		parts = append(parts, pollFailureReason(status.run))
+	}
+	if hasFreshSuccessPrefix {
+		// The soft-throttled path already leads with the last successful refresh.
+	} else if !status.latestSuccess.IsZero() {
 		parts = append(parts, "last success "+formatRelativeTime(status.latestSuccess, now))
 	} else if !status.latestSampleAt.IsZero() {
 		parts = append(parts, "sample "+formatRelativeTime(status.latestSampleAt, now))
@@ -264,6 +279,31 @@ func pollFailureSummary(status accountPollStatus, now time.Time) string {
 		parts = append(parts, action)
 	}
 	return strings.Join(parts, " · ")
+}
+
+func pollFailureSeverity(status accountPollStatus, now time.Time) int {
+	if !currentPollFailure(status) {
+		return 0
+	}
+	code := strings.TrimSpace(status.run.ErrorCode)
+	success := latestKnownSuccess(status)
+	successAge := time.Duration(0)
+	if !success.IsZero() {
+		successAge = now.Sub(success)
+	}
+	switch code {
+	case "rate_limited":
+		if success.IsZero() || successAge >= time.Hour {
+			return 2
+		}
+		return 1
+	case "transient_http_failure":
+		if status.recentErrors >= 3 || success.IsZero() || successAge >= 15*time.Minute {
+			return 2
+		}
+		return 1
+	}
+	return 2
 }
 
 func pollFailureReason(run store.PollRun) string {
@@ -373,6 +413,12 @@ func latestPollStatus(ctx context.Context, db *store.Store, providerName, accoun
 			status.latestSuccess = runs[i].StartedAt
 			break
 		}
+	}
+	for i := len(runs) - 1; i >= 0; i-- {
+		if runs[i].Status != "error" {
+			break
+		}
+		status.recentErrors++
 	}
 	return status, nil
 }

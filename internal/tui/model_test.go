@@ -218,6 +218,58 @@ func TestRenderAccountHealth(t *testing.T) {
 		t.Fatalf("health missing ok status: %q", line)
 	}
 	line = renderAccountHealth(model.styles, accountPollStatus{
+		hasRun:        true,
+		latestSuccess: now.Add(-2 * time.Minute),
+		recentErrors:  1,
+		run: store.PollRun{
+			StartedAt:    now.Add(-time.Minute),
+			Provider:     "claude",
+			Status:       "error",
+			ErrorCode:    "rate_limited",
+			ErrorMessage: "claude: rate_limited: HTTP 429",
+		},
+	}, now)
+	for _, want := range []string{"ok 2m ago", "latest refresh rate limited"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("soft rate-limit health missing %q: %q", want, line)
+		}
+	}
+	if strings.Contains(line, "last success") {
+		t.Fatalf("soft rate-limit health should not look like a hard failure: %q", line)
+	}
+	line = renderAccountHealth(model.styles, accountPollStatus{
+		hasRun:        true,
+		latestSuccess: now.Add(-20 * time.Minute),
+		recentErrors:  3,
+		run: store.PollRun{
+			StartedAt: now.Add(-time.Minute),
+			Provider:  "claude",
+			Status:    "error",
+			ErrorCode: "rate_limited",
+		},
+	}, now)
+	for _, want := range []string{"ok 20m ago", "latest refresh rate limited"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("soft repeated rate-limit health missing %q: %q", want, line)
+		}
+	}
+	line = renderAccountHealth(model.styles, accountPollStatus{
+		hasRun:        true,
+		latestSuccess: now.Add(-2 * time.Hour),
+		recentErrors:  3,
+		run: store.PollRun{
+			StartedAt: now.Add(-time.Minute),
+			Provider:  "claude",
+			Status:    "error",
+			ErrorCode: "rate_limited",
+		},
+	}, now)
+	for _, want := range []string{"rate limited", "last success 2h ago"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("hard rate-limit health missing %q: %q", want, line)
+		}
+	}
+	line = renderAccountHealth(model.styles, accountPollStatus{
 		hasRun:         true,
 		latestSampleAt: now,
 		run: store.PollRun{
