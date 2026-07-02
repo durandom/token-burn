@@ -6,7 +6,6 @@ pretending that provider internals are stable.
 
 ## Near Term
 
-- Linux systemd user service install/uninstall/status.
 - Retention cleanup for old samples and poll errors.
 - Homebrew formula/tap, if installing via GitHub Releases is not enough.
 - Better terminal layout behavior for very narrow terminals.

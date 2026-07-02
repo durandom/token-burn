@@ -185,7 +185,6 @@ id = "copilot-default"
 
 ## Roadmap Notes
 
-- Linux service management should use systemd user services.
 - Retention cleanup should run at daemon start and then daily.
 - Raw JSON should remain opt-in diagnostics.
 - Token refresh must remain narrowly scoped to existing vendor refresh tokens
