@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -38,6 +40,31 @@ func TestUpgradeCommandIsRegistered(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("upgrade command is not registered")
+	}
+}
+
+func TestInstallSpecUsesConfiguredDatabasePath(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	databasePath := filepath.Join(dir, "custom", "token-burn.db")
+	data := []byte(`
+poll_interval = "5m"
+database_path = "` + filepath.ToSlash(databasePath) + `"
+
+[[accounts]]
+provider = "codex"
+id = "codex-default"
+`)
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	spec, err := installSpec("/tmp/token-burn", configPath)
+	if err != nil {
+		t.Fatalf("installSpec() error = %v", err)
+	}
+	if spec.DatabasePath != databasePath {
+		t.Fatalf("DatabasePath = %q, want %q", spec.DatabasePath, databasePath)
 	}
 }
 

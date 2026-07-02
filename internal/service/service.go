@@ -18,10 +18,11 @@ import (
 const DefaultLabel = "dev.durandom.token-burn"
 
 type Spec struct {
-	Label      string
-	BinaryPath string
-	ConfigPath string
-	LogPath    string
+	Label        string
+	BinaryPath   string
+	ConfigPath   string
+	LogPath      string
+	DatabasePath string
 }
 
 type Status struct {
@@ -41,10 +42,11 @@ func DefaultSpec(binaryPath, configPath string) (Spec, error) {
 		}
 	}
 	return Spec{
-		Label:      DefaultLabel,
-		BinaryPath: binaryPath,
-		ConfigPath: configPath,
-		LogPath:    config.DefaultLogPath(),
+		Label:        DefaultLabel,
+		BinaryPath:   binaryPath,
+		ConfigPath:   configPath,
+		LogPath:      config.DefaultLogPath(),
+		DatabasePath: config.DefaultDatabasePath(),
 	}, nil
 }
 
@@ -52,6 +54,8 @@ func Install(ctx context.Context, spec Spec) error {
 	switch runtime.GOOS {
 	case "darwin":
 		return installLaunchAgent(ctx, spec)
+	case "linux":
+		return installSystemdUnit(ctx, spec)
 	default:
 		return fmt.Errorf("service install is not implemented for %s yet", runtime.GOOS)
 	}
@@ -61,6 +65,8 @@ func Uninstall(ctx context.Context, label string) error {
 	switch runtime.GOOS {
 	case "darwin":
 		return uninstallLaunchAgent(ctx, label)
+	case "linux":
+		return uninstallSystemdUnit(ctx, label)
 	default:
 		return fmt.Errorf("service uninstall is not implemented for %s yet", runtime.GOOS)
 	}
@@ -70,6 +76,8 @@ func ServiceStatus(ctx context.Context, label string) (Status, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		return launchAgentStatus(ctx, label)
+	case "linux":
+		return systemdUnitStatus(ctx, label)
 	default:
 		return Status{Platform: runtime.GOOS, Message: "service status is not implemented for this platform yet"}, nil
 	}

@@ -42,7 +42,7 @@ edges and occasional breakage.
 - Forecasts burn rate, exhaustion time, and projected percent at reset.
 - Exports current usage and forecast gauges through OpenTelemetry OTLP.
 - Ships an OpenObserve dashboard template for long-term observability.
-- Runs as a user service on macOS via LaunchAgent.
+- Runs as a user service on macOS via LaunchAgent and on Linux via a systemd user unit.
 - Reuses existing provider authentication from the vendor tools.
 
 ## Use Cases
@@ -115,7 +115,7 @@ Requirements:
 - Go 1.26+
 - A logged-in Codex, Claude Code, GitHub CLI, and/or Google Antigravity
   installation
-- macOS for `install` service management today
+- macOS (LaunchAgent) or Linux (systemd user unit) for `install` service management
 
 ```sh
 git clone https://github.com/durandom/token-burn.git
@@ -129,10 +129,28 @@ Run one live fetch:
 ./bin/token-burn once --json
 ```
 
-Install the background daemon on macOS:
+Install the background daemon (macOS LaunchAgent or Linux systemd user unit):
 
 ```sh
 ./bin/token-burn install --binary "$PWD/bin/token-burn"
+```
+
+On Linux this writes `~/.config/systemd/user/token-burn.service`, runs
+`systemctl --user enable --now token-burn.service`, and attempts
+`loginctl enable-linger` so the daemon keeps polling after logout. Enabling
+linger may require polkit authorization; if it fails the daemon still runs
+while you are logged in, and you can enable it manually:
+
+```sh
+loginctl enable-linger "$USER"
+```
+
+Inspect or remove it with:
+
+```sh
+systemctl --user status token-burn.service
+journalctl --user -u token-burn.service -f
+./bin/token-burn uninstall
 ```
 
 Open the dashboard:
@@ -337,7 +355,6 @@ and intentionally small, but it depends on provider behavior that may change.
 
 Roadmap:
 
-- Linux systemd user service install
 - Windows viability check
 - retention cleanup
 - Homebrew formula/tap
