@@ -65,6 +65,7 @@ func SystemdUnit(spec Spec) ([]byte, error) {
 	fmt.Fprintf(&buf, "ExecStart=%s\n", execStart)
 	buf.WriteString("Restart=on-failure\n")
 	buf.WriteString("RestartSec=30\n")
+	fmt.Fprintf(&buf, "Environment=PATH=%s\n", launchAgentPathEnv(spec.BinaryPath))
 	for _, item := range systemdHomeEnvironment() {
 		fmt.Fprintf(&buf, "Environment=%s=%s\n", item.key, item.value)
 	}

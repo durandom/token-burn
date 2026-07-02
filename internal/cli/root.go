@@ -179,7 +179,7 @@ func newInstallCommand(configPath *string) *cobra.Command {
 		Short: "Install token-burn as a user service",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			spec, err := service.DefaultSpec(binaryPath, *configPath)
+			spec, err := installSpec(binaryPath, *configPath)
 			if err != nil {
 				return err
 			}
@@ -192,6 +192,19 @@ func newInstallCommand(configPath *string) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&binaryPath, "binary", "", "binary path to run from the service")
 	return cmd
+}
+
+func installSpec(binaryPath, configPath string) (service.Spec, error) {
+	spec, err := service.DefaultSpec(binaryPath, configPath)
+	if err != nil {
+		return service.Spec{}, err
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return service.Spec{}, err
+	}
+	spec.DatabasePath = cfg.DatabasePath
+	return spec, nil
 }
 
 func newUninstallCommand() *cobra.Command {

@@ -23,6 +23,7 @@ func TestSystemdUnit(t *testing.T) {
 		"[Install]",
 		"Type=simple",
 		"ExecStart=/home/test/.local/bin/token-burn daemon --config /home/test/.config/token-burn/config.toml",
+		"Environment=PATH=/home/test/.local/bin:",
 		"Restart=on-failure",
 		"WantedBy=default.target",
 		"ProtectSystem=strict",
