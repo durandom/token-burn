@@ -1,0 +1,1396 @@
+{
+  "version": 8,
+  "title": "Token Burn TUI",
+  "description": "Glanceable quota view modeled on the token-burn TUI: one block per account, stacked used/forecast/free bars plus window detail.",
+  "owner": "",
+  "role": "editor",
+  "created": "2026-07-03T00:00:00Z",
+  "dashboardId": "token-burn-tui",
+  "defaultDatetimeDuration": {
+    "type": "relative",
+    "relativeTimePeriod": "24h"
+  },
+  "variables": [],
+  "tabs": [
+    {
+      "tabId": "default",
+      "name": "Now",
+      "panels": [
+        {
+          "id": "1",
+          "type": "h-stacked",
+          "title": "claude/claude-default",
+          "description": "Quota bar per window: used / forecast to reset / free.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 1,
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0
+            },
+            "axis_label_rotate": 0,
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "legend_height": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1,
+              "lat": 0,
+              "lng": 0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1,
+                "max": 100
+              },
+              "size_fixed": 2
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "mappings": [],
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#166534"
+              ],
+              "seriesBy": "last",
+              "colorBySeries": [
+                {
+                  "value": "used",
+                  "color": "#166534"
+                },
+                {
+                  "value": "forecast",
+                  "color": "#22c55e"
+                },
+                {
+                  "value": "free",
+                  "color": "#d1d5db"
+                }
+              ]
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1,
+              "group_by_y_axis": false
+            },
+            "show_gridlines": false,
+            "aggregation": "last",
+            "table_aggregations": [
+              "last"
+            ],
+            "promql_table_mode": "single",
+            "visible_columns": [],
+            "hidden_columns": [],
+            "sticky_columns": [],
+            "sticky_first_column": false,
+            "column_order": [],
+            "table_pagination": false,
+            "table_pagination_rows_per_page": 20,
+            "table_pivot_show_row_totals": false,
+            "table_pivot_show_col_totals": false,
+            "table_pivot_sticky_row_totals": false,
+            "table_pivot_sticky_col_totals": false,
+            "panel_time_enabled": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "WITH u AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_usage_used_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_usage_used_percent\" WHERE provider = 'claude' AND account_id = 'claude-default' GROUP BY window) mu ON s.window = mu.window AND s._timestamp = mu.latest WHERE s.provider = 'claude' AND s.account_id = 'claude-default'), f AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_forecast_projected_reset_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_forecast_projected_reset_percent\" WHERE provider = 'claude' AND account_id = 'claude-default' GROUP BY window) mf ON s.window = mf.window AND s._timestamp = mf.latest WHERE s.provider = 'claude' AND s.account_id = 'claude-default'), base AS (SELECT u.win AS win, u.val AS used, CASE WHEN f.val IS NULL OR f.val <= u.val THEN 0 WHEN f.val >= 100 THEN CASE WHEN u.val >= 100 THEN 0 ELSE 100 - u.val END ELSE f.val - u.val END AS fc FROM u LEFT JOIN f ON u.win = f.win) SELECT replace(win, '_', ' ') AS \"x_axis_1\", 'used' AS \"breakdown_1\", used AS \"y_axis_1\" FROM base UNION ALL SELECT replace(win, '_', ' '), 'forecast', fc FROM base UNION ALL SELECT replace(win, '_', ' '), 'free', CASE WHEN 100 - used - fc < 0 THEN 0 ELSE 100 - used - fc END FROM base ORDER BY \"x_axis_1\" ASC",
+              "fields": {
+                "stream": "token_burn_usage_used_percent",
+                "stream_type": "metrics",
+                "x": [
+                  {
+                    "label": "Window",
+                    "alias": "x_axis_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "replace(win, '_', ' ')",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "Percent",
+                    "alias": "y_axis_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "used",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "z": [],
+                "breakdown": [
+                  {
+                    "label": "Segment",
+                    "alias": "breakdown_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "'used'",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "limit": 0,
+                "time_shift": [],
+                "min": 0,
+                "max": 100
+              },
+              "joins": [],
+              "vrlFunctionQuery": "",
+              "customQuery": true
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 96,
+            "h": 12,
+            "i": 1
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": ""
+        },
+        {
+          "id": "2",
+          "type": "table",
+          "title": "claude/claude-default windows",
+          "description": "Window detail: used %, hours to reset, burn %/h, projected % at reset (uncapped).",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 1,
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0
+            },
+            "axis_label_rotate": 0,
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "legend_height": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1,
+              "lat": 0,
+              "lng": 0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1,
+                "max": 100
+              },
+              "size_fixed": 2
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "mappings": [],
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#166534"
+              ],
+              "seriesBy": "last",
+              "colorBySeries": []
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1,
+              "group_by_y_axis": false
+            },
+            "show_gridlines": false,
+            "aggregation": "last",
+            "table_aggregations": [
+              "last"
+            ],
+            "promql_table_mode": "single",
+            "visible_columns": [],
+            "hidden_columns": [],
+            "sticky_columns": [],
+            "sticky_first_column": false,
+            "column_order": [],
+            "table_pagination": false,
+            "table_pagination_rows_per_page": 20,
+            "table_pivot_show_row_totals": false,
+            "table_pivot_show_col_totals": false,
+            "table_pivot_sticky_row_totals": false,
+            "table_pivot_sticky_col_totals": false,
+            "panel_time_enabled": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "WITH u AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_usage_used_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_usage_used_percent\" WHERE provider = 'claude' AND account_id = 'claude-default' GROUP BY window) mu ON s.window = mu.window AND s._timestamp = mu.latest WHERE s.provider = 'claude' AND s.account_id = 'claude-default'), r AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_usage_seconds_to_reset\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_usage_seconds_to_reset\" WHERE provider = 'claude' AND account_id = 'claude-default' GROUP BY window) mr ON s.window = mr.window AND s._timestamp = mr.latest WHERE s.provider = 'claude' AND s.account_id = 'claude-default'), b AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_forecast_burn_rate_percent_per_hour\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_forecast_burn_rate_percent_per_hour\" WHERE provider = 'claude' AND account_id = 'claude-default' GROUP BY window) mb ON s.window = mb.window AND s._timestamp = mb.latest WHERE s.provider = 'claude' AND s.account_id = 'claude-default'), p AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_forecast_projected_reset_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_forecast_projected_reset_percent\" WHERE provider = 'claude' AND account_id = 'claude-default' GROUP BY window) mp ON s.window = mp.window AND s._timestamp = mp.latest WHERE s.provider = 'claude' AND s.account_id = 'claude-default') SELECT replace(u.win, '_', ' ') AS \"x_axis_1\", round(u.val, 1) AS \"x_axis_2\", round(r.val / 3600.0, 1) AS \"x_axis_3\", round(b.val, 2) AS \"x_axis_4\", round(p.val, 1) AS \"x_axis_5\" FROM u LEFT JOIN r ON u.win = r.win LEFT JOIN b ON u.win = b.win LEFT JOIN p ON u.win = p.win ORDER BY \"x_axis_1\" ASC",
+              "fields": {
+                "stream": "token_burn_usage_used_percent",
+                "stream_type": "metrics",
+                "x": [
+                  {
+                    "label": "window",
+                    "alias": "x_axis_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "replace(u.win, '_', ' ')",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "used %",
+                    "alias": "x_axis_2",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(u.val, 1)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "hours to reset",
+                    "alias": "x_axis_3",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(r.val / 3600.0, 1)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "burn %/h",
+                    "alias": "x_axis_4",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(b.val, 2)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "reset ~%",
+                    "alias": "x_axis_5",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(p.val, 1)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "limit": 0,
+                "time_shift": []
+              },
+              "joins": [],
+              "vrlFunctionQuery": "",
+              "customQuery": true
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 12,
+            "w": 96,
+            "h": 11,
+            "i": 2
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": ""
+        },
+        {
+          "id": "3",
+          "type": "h-stacked",
+          "title": "codex/codex-default",
+          "description": "Quota bar per window: used / forecast to reset / free.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 1,
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0
+            },
+            "axis_label_rotate": 0,
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "legend_height": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1,
+              "lat": 0,
+              "lng": 0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1,
+                "max": 100
+              },
+              "size_fixed": 2
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "mappings": [],
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#166534"
+              ],
+              "seriesBy": "last",
+              "colorBySeries": [
+                {
+                  "value": "used",
+                  "color": "#166534"
+                },
+                {
+                  "value": "forecast",
+                  "color": "#22c55e"
+                },
+                {
+                  "value": "free",
+                  "color": "#d1d5db"
+                }
+              ]
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1,
+              "group_by_y_axis": false
+            },
+            "show_gridlines": false,
+            "aggregation": "last",
+            "table_aggregations": [
+              "last"
+            ],
+            "promql_table_mode": "single",
+            "visible_columns": [],
+            "hidden_columns": [],
+            "sticky_columns": [],
+            "sticky_first_column": false,
+            "column_order": [],
+            "table_pagination": false,
+            "table_pagination_rows_per_page": 20,
+            "table_pivot_show_row_totals": false,
+            "table_pivot_show_col_totals": false,
+            "table_pivot_sticky_row_totals": false,
+            "table_pivot_sticky_col_totals": false,
+            "panel_time_enabled": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "WITH u AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_usage_used_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_usage_used_percent\" WHERE provider = 'codex' AND account_id = 'codex-default' GROUP BY window) mu ON s.window = mu.window AND s._timestamp = mu.latest WHERE s.provider = 'codex' AND s.account_id = 'codex-default'), f AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_forecast_projected_reset_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_forecast_projected_reset_percent\" WHERE provider = 'codex' AND account_id = 'codex-default' GROUP BY window) mf ON s.window = mf.window AND s._timestamp = mf.latest WHERE s.provider = 'codex' AND s.account_id = 'codex-default'), base AS (SELECT u.win AS win, u.val AS used, CASE WHEN f.val IS NULL OR f.val <= u.val THEN 0 WHEN f.val >= 100 THEN CASE WHEN u.val >= 100 THEN 0 ELSE 100 - u.val END ELSE f.val - u.val END AS fc FROM u LEFT JOIN f ON u.win = f.win) SELECT replace(win, '_', ' ') AS \"x_axis_1\", 'used' AS \"breakdown_1\", used AS \"y_axis_1\" FROM base UNION ALL SELECT replace(win, '_', ' '), 'forecast', fc FROM base UNION ALL SELECT replace(win, '_', ' '), 'free', CASE WHEN 100 - used - fc < 0 THEN 0 ELSE 100 - used - fc END FROM base ORDER BY \"x_axis_1\" ASC",
+              "fields": {
+                "stream": "token_burn_usage_used_percent",
+                "stream_type": "metrics",
+                "x": [
+                  {
+                    "label": "Window",
+                    "alias": "x_axis_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "replace(win, '_', ' ')",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "Percent",
+                    "alias": "y_axis_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "used",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "z": [],
+                "breakdown": [
+                  {
+                    "label": "Segment",
+                    "alias": "breakdown_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "'used'",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "limit": 0,
+                "time_shift": [],
+                "min": 0,
+                "max": 100
+              },
+              "joins": [],
+              "vrlFunctionQuery": "",
+              "customQuery": true
+            }
+          ],
+          "layout": {
+            "x": 96,
+            "y": 0,
+            "w": 96,
+            "h": 12,
+            "i": 3
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": ""
+        },
+        {
+          "id": "4",
+          "type": "table",
+          "title": "codex/codex-default windows",
+          "description": "Window detail: used %, hours to reset, burn %/h, projected % at reset (uncapped).",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 1,
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0
+            },
+            "axis_label_rotate": 0,
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "legend_height": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1,
+              "lat": 0,
+              "lng": 0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1,
+                "max": 100
+              },
+              "size_fixed": 2
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "mappings": [],
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#166534"
+              ],
+              "seriesBy": "last",
+              "colorBySeries": []
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1,
+              "group_by_y_axis": false
+            },
+            "show_gridlines": false,
+            "aggregation": "last",
+            "table_aggregations": [
+              "last"
+            ],
+            "promql_table_mode": "single",
+            "visible_columns": [],
+            "hidden_columns": [],
+            "sticky_columns": [],
+            "sticky_first_column": false,
+            "column_order": [],
+            "table_pagination": false,
+            "table_pagination_rows_per_page": 20,
+            "table_pivot_show_row_totals": false,
+            "table_pivot_show_col_totals": false,
+            "table_pivot_sticky_row_totals": false,
+            "table_pivot_sticky_col_totals": false,
+            "panel_time_enabled": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "WITH u AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_usage_used_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_usage_used_percent\" WHERE provider = 'codex' AND account_id = 'codex-default' GROUP BY window) mu ON s.window = mu.window AND s._timestamp = mu.latest WHERE s.provider = 'codex' AND s.account_id = 'codex-default'), r AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_usage_seconds_to_reset\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_usage_seconds_to_reset\" WHERE provider = 'codex' AND account_id = 'codex-default' GROUP BY window) mr ON s.window = mr.window AND s._timestamp = mr.latest WHERE s.provider = 'codex' AND s.account_id = 'codex-default'), b AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_forecast_burn_rate_percent_per_hour\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_forecast_burn_rate_percent_per_hour\" WHERE provider = 'codex' AND account_id = 'codex-default' GROUP BY window) mb ON s.window = mb.window AND s._timestamp = mb.latest WHERE s.provider = 'codex' AND s.account_id = 'codex-default'), p AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_forecast_projected_reset_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_forecast_projected_reset_percent\" WHERE provider = 'codex' AND account_id = 'codex-default' GROUP BY window) mp ON s.window = mp.window AND s._timestamp = mp.latest WHERE s.provider = 'codex' AND s.account_id = 'codex-default') SELECT replace(u.win, '_', ' ') AS \"x_axis_1\", round(u.val, 1) AS \"x_axis_2\", round(r.val / 3600.0, 1) AS \"x_axis_3\", round(b.val, 2) AS \"x_axis_4\", round(p.val, 1) AS \"x_axis_5\" FROM u LEFT JOIN r ON u.win = r.win LEFT JOIN b ON u.win = b.win LEFT JOIN p ON u.win = p.win ORDER BY \"x_axis_1\" ASC",
+              "fields": {
+                "stream": "token_burn_usage_used_percent",
+                "stream_type": "metrics",
+                "x": [
+                  {
+                    "label": "window",
+                    "alias": "x_axis_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "replace(u.win, '_', ' ')",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "used %",
+                    "alias": "x_axis_2",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(u.val, 1)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "hours to reset",
+                    "alias": "x_axis_3",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(r.val / 3600.0, 1)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "burn %/h",
+                    "alias": "x_axis_4",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(b.val, 2)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "reset ~%",
+                    "alias": "x_axis_5",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(p.val, 1)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "limit": 0,
+                "time_shift": []
+              },
+              "joins": [],
+              "vrlFunctionQuery": "",
+              "customQuery": true
+            }
+          ],
+          "layout": {
+            "x": 96,
+            "y": 12,
+            "w": 96,
+            "h": 11,
+            "i": 4
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": ""
+        },
+        {
+          "id": "5",
+          "type": "h-stacked",
+          "title": "copilot/copilot-default",
+          "description": "Quota bar per window: used / forecast to reset / free.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 1,
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0
+            },
+            "axis_label_rotate": 0,
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "legend_height": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1,
+              "lat": 0,
+              "lng": 0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1,
+                "max": 100
+              },
+              "size_fixed": 2
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "mappings": [],
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#166534"
+              ],
+              "seriesBy": "last",
+              "colorBySeries": [
+                {
+                  "value": "used",
+                  "color": "#166534"
+                },
+                {
+                  "value": "forecast",
+                  "color": "#22c55e"
+                },
+                {
+                  "value": "free",
+                  "color": "#d1d5db"
+                }
+              ]
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1,
+              "group_by_y_axis": false
+            },
+            "show_gridlines": false,
+            "aggregation": "last",
+            "table_aggregations": [
+              "last"
+            ],
+            "promql_table_mode": "single",
+            "visible_columns": [],
+            "hidden_columns": [],
+            "sticky_columns": [],
+            "sticky_first_column": false,
+            "column_order": [],
+            "table_pagination": false,
+            "table_pagination_rows_per_page": 20,
+            "table_pivot_show_row_totals": false,
+            "table_pivot_show_col_totals": false,
+            "table_pivot_sticky_row_totals": false,
+            "table_pivot_sticky_col_totals": false,
+            "panel_time_enabled": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "WITH u AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_usage_used_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_usage_used_percent\" WHERE provider = 'copilot' AND account_id = 'copilot-default' GROUP BY window) mu ON s.window = mu.window AND s._timestamp = mu.latest WHERE s.provider = 'copilot' AND s.account_id = 'copilot-default'), f AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_forecast_projected_reset_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_forecast_projected_reset_percent\" WHERE provider = 'copilot' AND account_id = 'copilot-default' GROUP BY window) mf ON s.window = mf.window AND s._timestamp = mf.latest WHERE s.provider = 'copilot' AND s.account_id = 'copilot-default'), base AS (SELECT u.win AS win, u.val AS used, CASE WHEN f.val IS NULL OR f.val <= u.val THEN 0 WHEN f.val >= 100 THEN CASE WHEN u.val >= 100 THEN 0 ELSE 100 - u.val END ELSE f.val - u.val END AS fc FROM u LEFT JOIN f ON u.win = f.win) SELECT replace(win, '_', ' ') AS \"x_axis_1\", 'used' AS \"breakdown_1\", used AS \"y_axis_1\" FROM base UNION ALL SELECT replace(win, '_', ' '), 'forecast', fc FROM base UNION ALL SELECT replace(win, '_', ' '), 'free', CASE WHEN 100 - used - fc < 0 THEN 0 ELSE 100 - used - fc END FROM base ORDER BY \"x_axis_1\" ASC",
+              "fields": {
+                "stream": "token_burn_usage_used_percent",
+                "stream_type": "metrics",
+                "x": [
+                  {
+                    "label": "Window",
+                    "alias": "x_axis_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "replace(win, '_', ' ')",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "y": [
+                  {
+                    "label": "Percent",
+                    "alias": "y_axis_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "used",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "z": [],
+                "breakdown": [
+                  {
+                    "label": "Segment",
+                    "alias": "breakdown_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "'used'",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "limit": 0,
+                "time_shift": [],
+                "min": 0,
+                "max": 100
+              },
+              "joins": [],
+              "vrlFunctionQuery": "",
+              "customQuery": true
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 23,
+            "w": 96,
+            "h": 12,
+            "i": 5
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": ""
+        },
+        {
+          "id": "6",
+          "type": "table",
+          "title": "copilot/copilot-default windows",
+          "description": "Window detail: used %, hours to reset, burn %/h, projected % at reset (uncapped).",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 1,
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0
+            },
+            "axis_label_rotate": 0,
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "legend_height": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1,
+              "lat": 0,
+              "lng": 0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1,
+                "max": 100
+              },
+              "size_fixed": 2
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "mappings": [],
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#166534"
+              ],
+              "seriesBy": "last",
+              "colorBySeries": []
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1,
+              "group_by_y_axis": false
+            },
+            "show_gridlines": false,
+            "aggregation": "last",
+            "table_aggregations": [
+              "last"
+            ],
+            "promql_table_mode": "single",
+            "visible_columns": [],
+            "hidden_columns": [],
+            "sticky_columns": [],
+            "sticky_first_column": false,
+            "column_order": [],
+            "table_pagination": false,
+            "table_pagination_rows_per_page": 20,
+            "table_pivot_show_row_totals": false,
+            "table_pivot_show_col_totals": false,
+            "table_pivot_sticky_row_totals": false,
+            "table_pivot_sticky_col_totals": false,
+            "panel_time_enabled": false
+          },
+          "queryType": "sql",
+          "queries": [
+            {
+              "query": "WITH u AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_usage_used_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_usage_used_percent\" WHERE provider = 'copilot' AND account_id = 'copilot-default' GROUP BY window) mu ON s.window = mu.window AND s._timestamp = mu.latest WHERE s.provider = 'copilot' AND s.account_id = 'copilot-default'), r AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_usage_seconds_to_reset\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_usage_seconds_to_reset\" WHERE provider = 'copilot' AND account_id = 'copilot-default' GROUP BY window) mr ON s.window = mr.window AND s._timestamp = mr.latest WHERE s.provider = 'copilot' AND s.account_id = 'copilot-default'), b AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_forecast_burn_rate_percent_per_hour\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_forecast_burn_rate_percent_per_hour\" WHERE provider = 'copilot' AND account_id = 'copilot-default' GROUP BY window) mb ON s.window = mb.window AND s._timestamp = mb.latest WHERE s.provider = 'copilot' AND s.account_id = 'copilot-default'), p AS (SELECT s.window AS win, s.value AS val FROM \"token_burn_forecast_projected_reset_percent\" s JOIN (SELECT window, max(_timestamp) AS latest FROM \"token_burn_forecast_projected_reset_percent\" WHERE provider = 'copilot' AND account_id = 'copilot-default' GROUP BY window) mp ON s.window = mp.window AND s._timestamp = mp.latest WHERE s.provider = 'copilot' AND s.account_id = 'copilot-default') SELECT replace(u.win, '_', ' ') AS \"x_axis_1\", round(u.val, 1) AS \"x_axis_2\", round(r.val / 3600.0, 1) AS \"x_axis_3\", round(b.val, 2) AS \"x_axis_4\", round(p.val, 1) AS \"x_axis_5\" FROM u LEFT JOIN r ON u.win = r.win LEFT JOIN b ON u.win = b.win LEFT JOIN p ON u.win = p.win ORDER BY \"x_axis_1\" ASC",
+              "fields": {
+                "stream": "token_burn_usage_used_percent",
+                "stream_type": "metrics",
+                "x": [
+                  {
+                    "label": "window",
+                    "alias": "x_axis_1",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "replace(u.win, '_', ' ')",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "used %",
+                    "alias": "x_axis_2",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(u.val, 1)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "hours to reset",
+                    "alias": "x_axis_3",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(r.val / 3600.0, 1)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "burn %/h",
+                    "alias": "x_axis_4",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(b.val, 2)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  },
+                  {
+                    "label": "reset ~%",
+                    "alias": "x_axis_5",
+                    "color": null,
+                    "type": "raw",
+                    "rawQuery": "round(p.val, 1)",
+                    "functionName": null,
+                    "args": [],
+                    "sortBy": null,
+                    "isDerived": false,
+                    "havingConditions": [],
+                    "treatAsNonTimestamp": true,
+                    "showFieldAsJson": false
+                  }
+                ],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "limit": 0,
+                "time_shift": []
+              },
+              "joins": [],
+              "vrlFunctionQuery": "",
+              "customQuery": true
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 35,
+            "w": 96,
+            "h": 11,
+            "i": 6
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": ""
+        },
+        {
+          "id": "7",
+          "type": "markdown",
+          "title": "Legend",
+          "description": "",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 1,
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0
+            },
+            "axis_label_rotate": 0,
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "legend_height": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1,
+              "lat": 0,
+              "lng": 0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1,
+                "max": 100
+              },
+              "size_fixed": 2
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "mappings": [],
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#166534"
+              ],
+              "seriesBy": "last",
+              "colorBySeries": []
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1,
+              "group_by_y_axis": false
+            },
+            "show_gridlines": false,
+            "aggregation": "last",
+            "table_aggregations": [
+              "last"
+            ],
+            "promql_table_mode": "single",
+            "visible_columns": [],
+            "hidden_columns": [],
+            "sticky_columns": [],
+            "sticky_first_column": false,
+            "column_order": [],
+            "table_pagination": false,
+            "table_pagination_rows_per_page": 20,
+            "table_pivot_show_row_totals": false,
+            "table_pivot_show_col_totals": false,
+            "table_pivot_sticky_row_totals": false,
+            "table_pivot_sticky_col_totals": false,
+            "panel_time_enabled": false
+          },
+          "queryType": "sql",
+          "queries": [],
+          "layout": {
+            "x": 96,
+            "y": 23,
+            "w": 96,
+            "h": 22,
+            "i": 7
+          },
+          "htmlContent": "",
+          "markdownContent": "### Bar legend\n\n- **used** (dark green): current provider-reported usage\n- **forecast** (light green): projected additional usage by reset (`max(0, projected - used)`, capped at 100 on the bar; the table's `reset ~%` stays uncapped)\n- **free** (gray): remaining capacity if the forecast holds\n\nWindows without a forecast sample show only used/free.\n\n### Adding an account\n\nBlocks are fixed per provider/account. To add one (e.g. antigravity), duplicate a bar+table panel pair and replace the `provider = '...'` and `account_id = '...'` literals in both queries.",
+          "customChartContent": ""
+        }
+      ]
+    },
+    {
+      "tabId": "history",
+      "name": "History",
+      "panels": [
+        {
+          "id": "101",
+          "type": "line",
+          "title": "Used Percent Over Time",
+          "description": "The TUI moment, over time: provider-reported used percent per window.",
+          "config": {
+            "show_legends": true,
+            "legends_position": "bottom",
+            "decimals": 1,
+            "line_thickness": 1.5,
+            "step_value": "0",
+            "top_results_others": false,
+            "axis_border_show": false,
+            "label_option": {
+              "rotate": 0
+            },
+            "axis_label_rotate": 0,
+            "show_symbol": false,
+            "line_interpolation": "smooth",
+            "legend_width": {
+              "unit": "px"
+            },
+            "legend_height": {
+              "unit": "px"
+            },
+            "base_map": {
+              "type": "osm"
+            },
+            "map_type": {
+              "type": "world"
+            },
+            "map_view": {
+              "zoom": 1,
+              "lat": 0,
+              "lng": 0
+            },
+            "map_symbol_style": {
+              "size": "by Value",
+              "size_by_value": {
+                "min": 1,
+                "max": 100
+              },
+              "size_fixed": 2
+            },
+            "drilldown": [],
+            "mark_line": [],
+            "override_config": [],
+            "connect_nulls": false,
+            "no_value_replacement": "",
+            "wrap_table_cells": false,
+            "table_transpose": false,
+            "table_dynamic_columns": false,
+            "mappings": [],
+            "color": {
+              "mode": "palette-classic-by-series",
+              "fixedColor": [
+                "#166534"
+              ],
+              "seriesBy": "last",
+              "colorBySeries": []
+            },
+            "trellis": {
+              "layout": null,
+              "num_of_columns": 1,
+              "group_by_y_axis": false
+            },
+            "show_gridlines": false,
+            "aggregation": "last",
+            "table_aggregations": [
+              "last"
+            ],
+            "promql_table_mode": "single",
+            "visible_columns": [],
+            "hidden_columns": [],
+            "sticky_columns": [],
+            "sticky_first_column": false,
+            "column_order": [],
+            "table_pagination": false,
+            "table_pagination_rows_per_page": 20,
+            "table_pivot_show_row_totals": false,
+            "table_pivot_show_col_totals": false,
+            "table_pivot_sticky_row_totals": false,
+            "table_pivot_sticky_col_totals": false,
+            "panel_time_enabled": false
+          },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "token_burn_usage_used_percent{provider!=\"test\"}",
+              "fields": {
+                "stream": "token_burn_usage_used_percent",
+                "stream_type": "metrics",
+                "x": [],
+                "y": [],
+                "z": [],
+                "breakdown": [],
+                "filter": {
+                  "filterType": "group",
+                  "logicalOperator": "AND",
+                  "conditions": []
+                }
+              },
+              "config": {
+                "promql_legend": "{provider}/{account_id}/{window}",
+                "layer_type": "scatter",
+                "weight_fixed": 1,
+                "limit": 0,
+                "min": 0,
+                "max": 100,
+                "time_shift": []
+              },
+              "joins": [],
+              "vrlFunctionQuery": "",
+              "customQuery": true
+            }
+          ],
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 192,
+            "h": 18,
+            "i": 101
+          },
+          "htmlContent": "",
+          "markdownContent": "",
+          "customChartContent": ""
+        }
+      ]
+    }
+  ]
+}
