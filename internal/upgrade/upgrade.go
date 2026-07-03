@@ -20,6 +20,9 @@ import (
 
 const DefaultRepo = "durandom/token-burn"
 
+// renameFile is swapped out in tests to simulate cross-device rename failures.
+var renameFile = os.Rename
+
 type Options struct {
 	Repo        string
 	Version     string
@@ -257,22 +260,67 @@ func replaceBinary(source, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return fmt.Errorf("create binary directory: %w", err)
 	}
+	mode := os.FileMode(0755)
+	backup := dest + ".old"
+	haveBackup := false
 	info, err := os.Stat(dest)
 	if err == nil {
-		backup := dest + ".old"
+		mode = info.Mode().Perm()
 		_ = os.Remove(backup)
 		if err := os.Rename(dest, backup); err != nil {
 			return fmt.Errorf("backup existing binary: %w", err)
 		}
-		defer os.Remove(backup)
-		if err := os.Chmod(source, info.Mode().Perm()); err != nil {
-			return fmt.Errorf("preserve binary permissions: %w", err)
-		}
+		haveBackup = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat existing binary: %w", err)
 	}
-	if err := os.Rename(source, dest); err != nil {
+	if err := installBinary(source, dest, mode); err != nil {
+		if haveBackup {
+			_ = os.Rename(backup, dest)
+		}
 		return fmt.Errorf("replace binary: %w", err)
+	}
+	if haveBackup {
+		_ = os.Remove(backup)
+	}
+	return nil
+}
+
+// installBinary moves source to dest. The temp dir (source) and dest often
+// live on different filesystems (e.g. tmpfs /tmp vs the home partition),
+// where rename fails with EXDEV — fall back to copying into a staging file
+// next to dest so the final rename stays on one filesystem and is atomic.
+func installBinary(source, dest string, mode os.FileMode) error {
+	if err := os.Chmod(source, mode); err != nil {
+		return fmt.Errorf("preserve binary permissions: %w", err)
+	}
+	if renameFile(source, dest) == nil {
+		return nil
+	}
+	staging, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".new-*")
+	if err != nil {
+		return fmt.Errorf("create staging file: %w", err)
+	}
+	stagingPath := staging.Name()
+	defer os.Remove(stagingPath)
+	src, err := os.Open(source)
+	if err != nil {
+		staging.Close()
+		return fmt.Errorf("open new binary: %w", err)
+	}
+	_, copyErr := io.Copy(staging, src)
+	src.Close()
+	if closeErr := staging.Close(); copyErr == nil {
+		copyErr = closeErr
+	}
+	if copyErr != nil {
+		return fmt.Errorf("copy new binary: %w", copyErr)
+	}
+	if err := os.Chmod(stagingPath, mode); err != nil {
+		return fmt.Errorf("set binary permissions: %w", err)
+	}
+	if err := os.Rename(stagingPath, dest); err != nil {
+		return fmt.Errorf("install new binary: %w", err)
 	}
 	return nil
 }
