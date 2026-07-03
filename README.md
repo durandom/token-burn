@@ -101,6 +101,17 @@ Upgrade later:
 token-burn upgrade
 ```
 
+Known issue: upgrading **from v0.1.14 or older** can fail with
+`invalid cross-device link` and remove the installed binary when `/tmp` and
+the install directory are on different filesystems (for example tmpfs `/tmp`
+and a separate `/home`). The replace logic is fixed in v0.1.15+, but the old
+binary performs the upgrade, so the failure can still happen once during that
+transition. Recovery is a reinstall:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/durandom/token-burn/main/scripts/install.sh | sh
+```
+
 If `~/.local/bin` is not on your `PATH`, either add it or set
 `TOKEN_BURN_INSTALL_DIR`.
 
