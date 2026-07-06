@@ -133,6 +133,150 @@ func TestFetchMapsEnabledExtraUsage(t *testing.T) {
 	}
 }
 
+func TestFetchMapsScopedWeeklyLimits(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		want     map[string]float64
+		wantSkip []string
+	}{
+		{
+			name: "model scoped weekly limit becomes extra window",
+			body: `{
+				"five_hour": {"utilization": 2.0, "resets_at": "2026-07-03T17:00:00Z"},
+				"seven_day": {"utilization": 11.0, "resets_at": "2026-07-08T20:00:00Z"},
+				"seven_day_opus": null,
+				"limits": [
+					{"kind": "session", "group": "session", "percent": 2, "resets_at": "2026-07-03T17:00:00Z"},
+					{"kind": "weekly_all", "group": "weekly", "percent": 11, "resets_at": "2026-07-08T20:00:00Z"},
+					{"kind": "weekly_scoped", "group": "weekly", "percent": 7, "resets_at": "2026-07-08T20:00:00Z",
+					 "scope": {"model": {"id": null, "display_name": "Fable"}}}
+				]
+			}`,
+			want: map[string]float64{
+				"five_hour":        2,
+				"seven_day":        11,
+				"seven_day_fable":  7,
+			},
+		},
+		{
+			name: "scoped limit without display name falls back to model id",
+			body: `{
+				"limits": [
+					{"kind": "weekly_scoped", "group": "weekly", "percent": 4, "resets_at": "2026-07-08T20:00:00Z",
+					 "scope": {"model": {"id": "claude-fable-5", "display_name": null}}}
+				]
+			}`,
+			want: map[string]float64{"seven_day_claude_fable_5": 4},
+		},
+		{
+			name: "scoped limit without percent is skipped",
+			body: `{
+				"limits": [
+					{"kind": "weekly_scoped", "group": "weekly", "resets_at": "2026-07-08T20:00:00Z",
+					 "scope": {"model": {"display_name": "Fable"}}}
+				]
+			}`,
+			wantSkip: []string{"seven_day_fable"},
+		},
+		{
+			name: "duplicate scoped names keep first entry",
+			body: `{
+				"limits": [
+					{"kind": "weekly_scoped", "group": "weekly", "percent": 7, "resets_at": "2026-07-08T20:00:00Z",
+					 "scope": {"model": {"display_name": "Fable"}}},
+					{"kind": "weekly_scoped", "group": "weekly", "percent": 9, "resets_at": "2026-07-08T20:00:00Z",
+					 "scope": {"model": {"display_name": "Fable"}}}
+				]
+			}`,
+			want: map[string]float64{"seven_day_fable": 7},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			credPath := writeCredentials(t, `{"claudeAiOauth":{"accessToken":"claude-token"}}`)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			snap, err := (&Provider{
+				BaseURL: server.URL,
+				Now:     func() time.Time { return time.Date(2026, 7, 3, 10, 0, 0, 0, time.UTC) },
+				HomeDir: func() (string, error) {
+					return t.TempDir(), nil
+				},
+				Env: func(string) string { return "" },
+			}).Fetch(context.Background(), usageprovider.Account{
+				ID:              "claude-default",
+				CredentialsFile: credPath,
+			})
+			if err != nil {
+				t.Fatalf("Fetch() error = %v", err)
+			}
+
+			byName := windowsByName(snap.Windows)
+			if len(byName) != len(tt.want) {
+				t.Fatalf("windows = %#v, want %d windows %v", snap.Windows, len(tt.want), tt.want)
+			}
+			for name, used := range tt.want {
+				win, ok := byName[name]
+				if !ok {
+					t.Fatalf("window %q missing, got %#v", name, snap.Windows)
+				}
+				if win.UsedPercent != used {
+					t.Fatalf("%s used = %v, want %v", name, win.UsedPercent, used)
+				}
+			}
+			for _, name := range tt.wantSkip {
+				if _, ok := byName[name]; ok {
+					t.Fatalf("window %q should be skipped, got %#v", name, snap.Windows)
+				}
+			}
+		})
+	}
+}
+
+func TestFetchScopedLimitResetTime(t *testing.T) {
+	credPath := writeCredentials(t, `{"claudeAiOauth":{"accessToken":"claude-token"}}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"limits": [
+				{"kind": "weekly_scoped", "group": "weekly", "percent": 7,
+				 "resets_at": "2026-07-08T19:59:59.801499+00:00",
+				 "scope": {"model": {"display_name": "Fable"}}}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	snap, err := (&Provider{
+		BaseURL: server.URL,
+		Now:     func() time.Time { return time.Date(2026, 7, 3, 10, 0, 0, 0, time.UTC) },
+		HomeDir: func() (string, error) {
+			return t.TempDir(), nil
+		},
+		Env: func(string) string { return "" },
+	}).Fetch(context.Background(), usageprovider.Account{
+		ID:              "claude-default",
+		CredentialsFile: credPath,
+	})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+
+	byName := windowsByName(snap.Windows)
+	win, ok := byName["seven_day_fable"]
+	if !ok {
+		t.Fatalf("seven_day_fable missing, got %#v", snap.Windows)
+	}
+	if win.ResetAt == nil || !win.ResetAt.Equal(time.Date(2026, 7, 8, 19, 59, 59, 801499000, time.UTC)) {
+		t.Fatalf("seven_day_fable reset = %v, want 2026-07-08T19:59:59.801499Z", win.ResetAt)
+	}
+}
+
 func TestFetchUsesEnvironmentTokenBeforeFile(t *testing.T) {
 	credPath := writeCredentials(t, `{"access_token":"file-token"}`)
 

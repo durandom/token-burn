@@ -8,6 +8,23 @@ type usageResponse struct {
 	SevenDayCowork    *usageBucket `json:"seven_day_cowork"`
 	SevenDayOAuthApps *usageBucket `json:"seven_day_oauth_apps"`
 	ExtraUsage        *usageBucket `json:"extra_usage"`
+	Limits            []usageLimit `json:"limits"`
+}
+
+type usageLimit struct {
+	Kind     string      `json:"kind"`
+	Percent  *float64    `json:"percent"`
+	ResetsAt string      `json:"resets_at"`
+	Scope    *limitScope `json:"scope"`
+}
+
+type limitScope struct {
+	Model *limitModel `json:"model"`
+}
+
+type limitModel struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
 }
 
 type usageBucket struct {

@@ -168,8 +168,67 @@ func mapUsageResponse(payload usageResponse, acct usageprovider.Account, observe
 	addBucket(&snap, "seven_day_cowork", payload.SevenDayCowork)
 	addBucket(&snap, "seven_day_oauth_apps", payload.SevenDayOAuthApps)
 	addBucket(&snap, "extra_usage", payload.ExtraUsage)
+	addScopedLimits(&snap, payload.Limits)
 
 	return snap
+}
+
+// addScopedLimits maps model-scoped weekly limits from the limits array. The
+// session and weekly_all entries duplicate the legacy five_hour/seven_day
+// buckets, so only weekly_scoped entries produce additional windows.
+func addScopedLimits(snap *usageprovider.Snapshot, limits []usageLimit) {
+	seen := map[string]struct{}{}
+	for _, win := range snap.Windows {
+		seen[win.Name] = struct{}{}
+	}
+	for _, limit := range limits {
+		if limit.Kind != "weekly_scoped" || limit.Percent == nil {
+			continue
+		}
+		name := "seven_day_" + scopeSlug(limit.Scope)
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		var resetAt *time.Time
+		if strings.TrimSpace(limit.ResetsAt) != "" {
+			if parsed, err := time.Parse(time.RFC3339, limit.ResetsAt); err == nil {
+				t := parsed.UTC()
+				resetAt = &t
+			}
+		}
+		win, ok := usageprovider.NewWindow(name, usageprovider.WindowOptions{
+			UsedPercent: limit.Percent,
+			ResetAt:     resetAt,
+		})
+		if !ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		snap.Windows = append(snap.Windows, win)
+	}
+}
+
+func scopeSlug(scope *limitScope) string {
+	label := ""
+	if scope != nil && scope.Model != nil {
+		label = firstNonEmpty(scope.Model.DisplayName, scope.Model.ID)
+	}
+	if label == "" {
+		return "scoped"
+	}
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range strings.ToLower(label) {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastUnderscore = false
+		case !lastUnderscore && b.Len() > 0:
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	return strings.TrimSuffix(b.String(), "_")
 }
 
 func addBucket(snap *usageprovider.Snapshot, name string, bucket *usageBucket) {
