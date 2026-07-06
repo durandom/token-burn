@@ -39,6 +39,25 @@ The `token-burn otel-test` command emits a synthetic sample with
 `provider = test`. The dashboard intentionally filters those samples out with
 `provider <> 'test'`.
 
+## Token Burn TUI
+
+A second template mirrors the terminal UI's glanceable layout:
+
+```text
+contrib/openobserve/token-burn-tui.dashboard.json
+```
+
+The `Now` tab shows one block per provider/account: a stacked horizontal bar
+per window (used / forecasted additional usage by reset / free, matching the
+TUI bar legend) with a detail table underneath (used %, hours to reset, burn
+%/h, projected % at reset — uncapped). The `History` tab keeps a used-percent
+time series.
+
+Unlike the generic template, the account blocks are fixed: each panel filters
+on `provider` and `account_id` literals. To add an account, duplicate one
+bar+table panel pair and adjust the two literals in both queries. Windows
+appear automatically — no window names are hardcoded.
+
 ## Importing
 
 Import `contrib/openobserve/token-burn.dashboard.json` through OpenObserve's
