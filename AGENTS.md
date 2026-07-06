@@ -22,28 +22,33 @@ about provider live usage signals.
 
 ## Language Direction
 
-Prefer Go for the first implementation.
+The implementation is Go.
 
 Rationale:
 
 - Simple daemon/CLI story.
 - Strong OpenTelemetry support.
 - Easy SQLite integration.
-- Existing OpenUsage source code is Go and can be used as reference.
 - A CGO-free binary is possible with `modernc.org/sqlite`.
 
-## Expected Shape
+## Layout
 
 ```text
-cmd/token-burn/          CLI entrypoint
-internal/provider/       provider interface and shared models
-internal/provider/codex/ live Codex usage client
-internal/provider/claude live Claude usage client
-internal/store/          SQLite schema, migrations, queries
-internal/forecast/       burn-rate and exhaustion forecast logic
-internal/otel/           OTLP metric exporter
-internal/daemon/         poll loop, backoff, graceful shutdown
-internal/service/        macOS LaunchAgent install/uninstall/status
+cmd/token-burn/               CLI entrypoint
+internal/cli/                 command wiring
+internal/config/              XDG config load and defaults
+internal/provider/            provider interface and shared models
+internal/provider/codex/      live Codex usage client
+internal/provider/claude/     live Claude usage client
+internal/provider/copilot/    Copilot quota via the logged-in GitHub CLI
+internal/provider/antigravity/ Antigravity quota via existing OAuth state
+internal/store/               SQLite schema, migrations, queries
+internal/forecast/            burn-rate and exhaustion forecast logic
+internal/otel/                OTLP metric exporter
+internal/daemon/              poll loop, backoff, graceful shutdown
+internal/service/             macOS LaunchAgent and Linux systemd user unit
+internal/tui/                 read-only dashboard over SQLite
+internal/upgrade/             self-upgrade from GitHub Releases
 ```
 
 ## Code Style
@@ -54,8 +59,8 @@ internal/service/        macOS LaunchAgent install/uninstall/status
 - SQLite tests should use `t.TempDir`.
 - Never log raw access tokens, refresh tokens, cookies, or authorization headers.
 - Store raw provider JSON only after redacting obvious token/cookie fields.
-- Use UTC timestamps in storage; format in local time only in CLI output.
-- Avoid UI/TUI complexity. CLI text and JSON are enough.
+- Use UTC timestamps in storage; format in local time only in CLI/TUI output.
+- Keep the TUI a read-only view over SQLite; it must not poll providers.
 
 ## Security
 
