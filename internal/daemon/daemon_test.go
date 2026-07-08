@@ -430,8 +430,14 @@ func TestBackoffNextDelay(t *testing.T) {
 	if got := backoff.NextDelay(true); got != 5*time.Minute {
 		t.Fatalf("capped failure delay = %s, want 5m", got)
 	}
+	if got := backoff.NextDelay(false); got != 2*time.Minute+30*time.Second {
+		t.Fatalf("first recovery delay = %s, want 2m30s", got)
+	}
+	if got := backoff.NextDelay(false); got != time.Minute+15*time.Second {
+		t.Fatalf("second recovery delay = %s, want 1m15s", got)
+	}
 	if got := backoff.NextDelay(false); got != time.Minute {
-		t.Fatalf("reset success delay = %s, want 1m", got)
+		t.Fatalf("steady-state delay = %s, want 1m", got)
 	}
 }
 
