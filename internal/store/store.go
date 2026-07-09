@@ -51,6 +51,15 @@ type PollRunFilter struct {
 	Limit     int
 }
 
+// DaemonState is the daemon's current polling cadence, published so other
+// processes (e.g. the TUI) can display the live interval rather than the
+// static config default. The interval varies with backoff.
+type DaemonState struct {
+	UpdatedAt    time.Time
+	PollInterval time.Duration
+	NextPollAt   *time.Time
+}
+
 type Sample struct {
 	ID               int64
 	ObservedAt       time.Time
@@ -133,6 +142,17 @@ CREATE TABLE IF NOT EXISTS forecasts (
 
 CREATE INDEX IF NOT EXISTS idx_forecasts_latest
   ON forecasts(provider, account_id, window_name, computed_at DESC);
+`,
+	},
+	{
+		version: 2,
+		sql: `
+CREATE TABLE IF NOT EXISTS daemon_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  updated_at TEXT NOT NULL,
+  poll_interval_ms INTEGER NOT NULL,
+  next_poll_at TEXT
+);
 `,
 	},
 }
@@ -330,6 +350,66 @@ INSERT INTO poll_runs (
 		return fmt.Errorf("record poll run: %w", err)
 	}
 	return nil
+}
+
+// UpsertDaemonState publishes the daemon's current polling cadence. The table
+// holds a single row (id = 1), so each call overwrites the previous state.
+func (s *Store) UpsertDaemonState(ctx context.Context, state DaemonState) error {
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now()
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO daemon_state (id, updated_at, poll_interval_ms, next_poll_at)
+VALUES (1, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  updated_at = excluded.updated_at,
+  poll_interval_ms = excluded.poll_interval_ms,
+  next_poll_at = excluded.next_poll_at;
+`,
+		formatTime(state.UpdatedAt),
+		state.PollInterval.Milliseconds(),
+		nullTime(state.NextPollAt),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert daemon state: %w", err)
+	}
+	return nil
+}
+
+// LatestDaemonState returns the daemon's published cadence. The bool is false
+// when no daemon has recorded state yet (e.g. TUI used without a daemon).
+func (s *Store) LatestDaemonState(ctx context.Context) (DaemonState, bool, error) {
+	var updatedAt string
+	var intervalMS int64
+	var nextPollAt sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+SELECT updated_at, poll_interval_ms, next_poll_at
+FROM daemon_state
+WHERE id = 1;
+`).Scan(&updatedAt, &intervalMS, &nextPollAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DaemonState{}, false, nil
+	}
+	if err != nil {
+		return DaemonState{}, false, fmt.Errorf("query daemon state: %w", err)
+	}
+
+	parsedUpdatedAt, err := parseTime(updatedAt)
+	if err != nil {
+		return DaemonState{}, false, fmt.Errorf("parse daemon updated_at: %w", err)
+	}
+	state := DaemonState{
+		UpdatedAt:    parsedUpdatedAt,
+		PollInterval: time.Duration(intervalMS) * time.Millisecond,
+	}
+	if nextPollAt.Valid {
+		parsedNextPollAt, err := parseTime(nextPollAt.String)
+		if err != nil {
+			return DaemonState{}, false, fmt.Errorf("parse daemon next_poll_at: %w", err)
+		}
+		state.NextPollAt = &parsedNextPollAt
+	}
+	return state, true, nil
 }
 
 func (s *Store) PollRuns(ctx context.Context, filter PollRunFilter) ([]PollRun, error) {
