@@ -46,6 +46,7 @@ func Execute(build BuildInfo) int {
 
 func NewRootCommand(build BuildInfo) *cobra.Command {
 	var configPath string
+	var verbose bool
 
 	root := &cobra.Command{
 		Use:           "token-burn",
@@ -55,12 +56,13 @@ func NewRootCommand(build BuildInfo) *cobra.Command {
 	}
 
 	root.PersistentFlags().StringVar(&configPath, "config", "", "config file path")
+	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "print diagnostic detail (timeout, rate-limit and reset timing)")
 	root.AddCommand(newVersionCommand(build))
-	root.AddCommand(newOnceCommand(&configPath))
+	root.AddCommand(newOnceCommand(&configPath, &verbose))
 	root.AddCommand(newStatusCommand(&configPath))
 	root.AddCommand(newHistoryCommand(&configPath))
 	root.AddCommand(newForecastCommand(&configPath))
-	root.AddCommand(newDaemonCommand(&configPath))
+	root.AddCommand(newDaemonCommand(&configPath, &verbose))
 	root.AddCommand(newInstallCommand(&configPath))
 	root.AddCommand(newUninstallCommand())
 	root.AddCommand(newServiceStatusCommand())
@@ -248,7 +250,7 @@ func newServiceStatusCommand() *cobra.Command {
 	return cmd
 }
 
-func newDaemonCommand(configPath *string) *cobra.Command {
+func newDaemonCommand(configPath *string, verbose *bool) *cobra.Command {
 	return &cobra.Command{
 		Use:   "daemon",
 		Short: "Run the polling daemon in the foreground",
@@ -258,7 +260,11 @@ func newDaemonCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return daemon.Run(cmd.Context(), daemon.Options{Config: cfg})
+			opts := daemon.Options{Config: cfg}
+			if verbose != nil && *verbose {
+				opts.Verbose = cmd.OutOrStdout()
+			}
+			return daemon.Run(cmd.Context(), opts)
 		},
 	}
 }
@@ -289,7 +295,7 @@ func printVersion(w io.Writer, build BuildInfo) {
 	fmt.Fprintf(w, "token-burn %s\ncommit: %s\nbuilt: %s\n", build.Version, build.Commit, build.Date)
 }
 
-func newOnceCommand(configPath *string) *cobra.Command {
+func newOnceCommand(configPath *string, verbose *bool) *cobra.Command {
 	var jsonOut bool
 	var writeStore bool
 	var rawJSON bool
@@ -306,7 +312,16 @@ func newOnceCommand(configPath *string) *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), cfg.HTTPTimeout)
 			defer cancel()
 
-			result := runOnce(ctx, cfg)
+			var diag io.Writer
+			if verbose != nil && *verbose {
+				// Diagnostics go to stdout as requested, but in --json mode
+				// route to stderr so machine-readable output stays clean.
+				diag = cmd.OutOrStdout()
+				if jsonOut {
+					diag = cmd.ErrOrStderr()
+				}
+			}
+			result := runOnce(ctx, cfg, diag)
 			if writeStore {
 				db, err := store.Open(cmd.Context(), cfg.DatabasePath)
 				if err != nil {
@@ -510,14 +525,20 @@ type forecastOutput struct {
 	StableWindowObservedFrom *time.Time `json:"stable_window_observed_from,omitempty"`
 }
 
-func runOnce(ctx context.Context, cfg config.Config) onceResult {
+func runOnce(ctx context.Context, cfg config.Config, diag io.Writer) onceResult {
 	result := onceResult{
 		Snapshots: []usageprovider.Snapshot{},
 		Errors:    []commandError{},
 	}
+	if diag != nil {
+		fmt.Fprintf(diag, "verbose: http_timeout=%s accounts=%d\n", cfg.HTTPTimeout, len(cfg.Accounts))
+	}
 	for _, acct := range cfg.Accounts {
 		client, ok := providerFor(acct.Provider)
 		if !ok {
+			if diag != nil {
+				fmt.Fprintf(diag, "verbose: %s/%s unsupported provider\n", acct.Provider, acct.ID)
+			}
 			result.Errors = append(result.Errors, commandError{
 				Provider:  acct.Provider,
 				AccountID: acct.ID,
@@ -525,6 +546,7 @@ func runOnce(ctx context.Context, cfg config.Config) onceResult {
 			})
 			continue
 		}
+		started := time.Now()
 		snap, err := client.Fetch(ctx, usageprovider.Account{
 			Provider:          acct.Provider,
 			ID:                acct.ID,
@@ -532,13 +554,54 @@ func runOnce(ctx context.Context, cfg config.Config) onceResult {
 			AuthFile:          acct.AuthFile,
 			CredentialsFile:   acct.CredentialsFile,
 		})
+		elapsed := time.Since(started)
+		if diag != nil {
+			fmt.Fprintf(diag, "verbose: %s/%s fetch elapsed=%s\n", acct.Provider, acct.ID, elapsed.Round(time.Millisecond))
+		}
 		if err != nil {
-			result.Errors = append(result.Errors, commandErrorFromError(acct.Provider, acct.ID, err))
+			cmdErr := commandErrorFromError(acct.Provider, acct.ID, err)
+			if diag != nil {
+				printVerboseError(diag, cmdErr)
+			}
+			result.Errors = append(result.Errors, cmdErr)
 			continue
+		}
+		if diag != nil {
+			printVerboseSnapshot(diag, snap, time.Now())
 		}
 		result.Snapshots = append(result.Snapshots, snap)
 	}
 	return result
+}
+
+func printVerboseError(w io.Writer, cmdErr commandError) {
+	fmt.Fprintf(w, "verbose:   error code=%s http=%d\n", orNone(cmdErr.Code), cmdErr.HTTPStatus)
+	if cmdErr.Code == string(usageprovider.ErrRateLimited) {
+		fmt.Fprintln(w, "verbose:   rate limited; no server Retry-After captured. Backoff/cooldown is applied by the daemon, not by once.")
+	}
+}
+
+func printVerboseSnapshot(w io.Writer, snap usageprovider.Snapshot, now time.Time) {
+	for _, win := range snap.Windows {
+		fmt.Fprintf(w, "verbose:   window %s: used=%.1f%%", win.Name, win.UsedPercent)
+		if win.RemainingPercent != nil {
+			fmt.Fprintf(w, " remaining=%.1f%%", *win.RemainingPercent)
+		}
+		if win.WindowSeconds != nil {
+			fmt.Fprintf(w, " window=%s", (time.Duration(*win.WindowSeconds) * time.Second))
+		}
+		if win.ResetAt != nil {
+			fmt.Fprintf(w, " reset=%s in=%s", win.ResetAt.Local().Format(time.RFC3339), win.ResetAt.Sub(now).Round(time.Second))
+		}
+		fmt.Fprintf(w, " limit_reached=%t\n", win.LimitReached)
+	}
+}
+
+func orNone(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "none"
+	}
+	return s
 }
 
 func providerFor(name string) (usageprovider.Provider, bool) {

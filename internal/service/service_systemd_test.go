@@ -22,7 +22,7 @@ func TestSystemdUnit(t *testing.T) {
 		"[Service]",
 		"[Install]",
 		"Type=simple",
-		"ExecStart=/home/test/.local/bin/token-burn daemon --config /home/test/.config/token-burn/config.toml",
+		"ExecStart=/home/test/.local/bin/token-burn daemon --verbose --config /home/test/.config/token-burn/config.toml",
 		"Environment=PATH=/home/test/.local/bin:",
 		"Restart=on-failure",
 		"WantedBy=default.target",
@@ -60,7 +60,7 @@ func TestSystemdUnitWithoutConfig(t *testing.T) {
 		t.Fatalf("SystemdUnit() error = %v", err)
 	}
 	text := string(unit)
-	if !strings.Contains(text, "ExecStart=/usr/local/bin/token-burn daemon\n") {
+	if !strings.Contains(text, "ExecStart=/usr/local/bin/token-burn daemon --verbose\n") {
 		t.Fatalf("unit ExecStart should omit --config:\n%s", text)
 	}
 	if strings.Contains(text, "--config") {
