@@ -140,17 +140,27 @@ func (b *Backoff) NextDelay(failed bool) time.Duration {
 	if b.Max <= 0 {
 		b.Max = 15 * time.Minute
 	}
-	switch {
-	case failed && b.current <= 0:
-		b.current = b.Base // first failure: hold at Base
-	case failed:
-		b.current *= 2 // multiplicative increase
-	default:
-		b.current /= 2 // decrease — probe back toward Base
+	// current == 0 is the steady state (no active backoff). It is kept
+	// distinct from current == Base (a first failure, primed to double) so a
+	// recovery that lands exactly on Base resets fully instead of doubling on
+	// the next failure.
+	if !failed {
+		// Multiplicative decrease: probe back toward Base, then steady state.
+		if b.current <= 0 {
+			return b.Base
+		}
+		b.current /= 2
+		if b.current <= b.Base {
+			b.current = 0
+			return b.Base
+		}
+		return b.current
 	}
-	if b.current < b.Base {
-		b.current = 0 // fully recovered → steady state
-		return b.Base
+	// Multiplicative increase: first failure holds at Base, then doubles.
+	if b.current <= 0 {
+		b.current = b.Base
+	} else {
+		b.current *= 2
 	}
 	if b.current > b.Max {
 		b.current = b.Max
