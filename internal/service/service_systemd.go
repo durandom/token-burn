@@ -48,7 +48,10 @@ func SystemdUnit(spec Spec) ([]byte, error) {
 		return nil, errors.New("binary path is required")
 	}
 
-	execStart := escapeExec(spec.BinaryPath) + " daemon"
+	// --verbose is on by default in the unit so backoff, rate-limit and
+	// credential auto-refresh diagnostics land in the journal and are
+	// visible via `systemctl --user status token-burn.service`.
+	execStart := escapeExec(spec.BinaryPath) + " daemon --verbose"
 	if spec.ConfigPath != "" {
 		execStart += " --config " + escapeExec(spec.ConfigPath)
 	}
