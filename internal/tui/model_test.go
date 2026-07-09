@@ -61,6 +61,21 @@ func TestViewRendersGlobalErrors(t *testing.T) {
 	}
 }
 
+func TestAutoRefreshLabelPrefersDaemonInterval(t *testing.T) {
+	model := NewModel(testConfig(t)) // config default is 5m
+
+	// No daemon state yet: falls back to config default, marked as such.
+	if got := model.autoRefreshLabel(); got != "auto-refresh 5m (config)" {
+		t.Fatalf("fallback label = %q, want config default", got)
+	}
+
+	// Daemon published a backed-off interval: label reflects the live value.
+	model.daemonState = &store.DaemonState{PollInterval: 14 * time.Minute}
+	if got := model.autoRefreshLabel(); got != "auto-refresh 14m" {
+		t.Fatalf("daemon label = %q, want live 14m", got)
+	}
+}
+
 func TestAccountHeaderOmitsEmptyPlan(t *testing.T) {
 	got := accountHeader("claude/claude-default", []store.Sample{{PlanType: ""}})
 	if got != "claude/claude-default" {

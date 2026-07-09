@@ -17,29 +17,31 @@ import (
 const refreshInterval = 60 * time.Second
 
 type Model struct {
-	cfg        config.Config
-	theme      Theme
-	styles     styles
-	width      int
-	height     int
-	staleAfter time.Duration
-	lastPoll   time.Time
-	lastGood   time.Time
-	loading    bool
-	samples    []store.Sample
-	forecasts  []forecastRow
-	statuses   map[string]accountPollStatus
-	errors     []string
+	cfg         config.Config
+	theme       Theme
+	styles      styles
+	width       int
+	height      int
+	staleAfter  time.Duration
+	lastPoll    time.Time
+	lastGood    time.Time
+	loading     bool
+	samples     []store.Sample
+	forecasts   []forecastRow
+	statuses    map[string]accountPollStatus
+	errors      []string
+	daemonState *store.DaemonState
 }
 
 type tickMsg struct{}
 type refreshMsg struct {
-	samples   []store.Sample
-	forecasts []forecastRow
-	statuses  map[string]accountPollStatus
-	errors    []string
-	lastPoll  time.Time
-	lastGood  time.Time
+	samples     []store.Sample
+	forecasts   []forecastRow
+	statuses    map[string]accountPollStatus
+	errors      []string
+	lastPoll    time.Time
+	lastGood    time.Time
+	daemonState *store.DaemonState
 }
 
 type accountPollStatus struct {
@@ -100,6 +102,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.errors = msg.errors
 		m.lastPoll = msg.lastPoll
 		m.lastGood = msg.lastGood
+		m.daemonState = msg.daemonState
 		return m, nil
 	}
 	return m, nil
@@ -126,7 +129,7 @@ func (m Model) View() string {
 		b.WriteString(st.subtle.Render(" · no successful refresh yet"))
 	}
 	b.WriteString("\n")
-	b.WriteString(st.subtle.Render("q quit  r refresh  auto-refresh " + formatDuration(m.cfg.PollInterval)))
+	b.WriteString(st.subtle.Render("q quit  r refresh  " + m.autoRefreshLabel()))
 	b.WriteString("\n\n")
 
 	if len(m.errors) > 0 {
@@ -342,6 +345,16 @@ func pollFailureAction(run store.PollRun) string {
 	return ""
 }
 
+// autoRefreshLabel shows the daemon's live polling cadence when it has
+// published state (it varies with backoff); otherwise it falls back to the
+// config default and marks it as such.
+func (m Model) autoRefreshLabel() string {
+	if m.daemonState != nil && m.daemonState.PollInterval > 0 {
+		return "auto-refresh " + formatDuration(m.daemonState.PollInterval)
+	}
+	return "auto-refresh " + formatDuration(m.cfg.PollInterval) + " (config)"
+}
+
 func (m Model) refresh() tea.Cmd {
 	cfg := m.cfg
 	return func() tea.Msg {
@@ -383,13 +396,20 @@ func (m Model) refresh() tea.Cmd {
 			}
 		}
 		forecasts := buildForecastRows(ctx, db, samples, now)
+		var daemonState *store.DaemonState
+		if state, ok, err := db.LatestDaemonState(ctx); err != nil {
+			errors = append(errors, err.Error())
+		} else if ok {
+			daemonState = &state
+		}
 		return refreshMsg{
-			samples:   samples,
-			forecasts: forecasts,
-			statuses:  pollStatus,
-			errors:    errors,
-			lastPoll:  latestPollOrSampleTime(pollStatus, samples),
-			lastGood:  latestSuccessTime(pollStatus, samples),
+			samples:     samples,
+			forecasts:   forecasts,
+			statuses:    pollStatus,
+			errors:      errors,
+			lastPoll:    latestPollOrSampleTime(pollStatus, samples),
+			lastGood:    latestSuccessTime(pollStatus, samples),
+			daemonState: daemonState,
 		}
 	}
 }

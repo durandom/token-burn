@@ -309,6 +309,57 @@ func TestPollRunsFiltersSinceAndLimit(t *testing.T) {
 	}
 }
 
+func TestDaemonStateRoundTripAndUpsert(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	defer store.Close()
+
+	if _, ok, err := store.LatestDaemonState(ctx); err != nil {
+		t.Fatalf("LatestDaemonState() error = %v", err)
+	} else if ok {
+		t.Fatal("LatestDaemonState() ok = true, want false before any upsert")
+	}
+
+	updatedAt := time.Date(2026, 7, 9, 10, 0, 0, 0, time.UTC)
+	nextPollAt := updatedAt.Add(7 * time.Minute)
+	if err := store.UpsertDaemonState(ctx, DaemonState{
+		UpdatedAt:    updatedAt,
+		PollInterval: 7 * time.Minute,
+		NextPollAt:   &nextPollAt,
+	}); err != nil {
+		t.Fatalf("UpsertDaemonState() error = %v", err)
+	}
+
+	got, ok, err := store.LatestDaemonState(ctx)
+	if err != nil || !ok {
+		t.Fatalf("LatestDaemonState() = ok %t err %v", ok, err)
+	}
+	if got.PollInterval != 7*time.Minute {
+		t.Fatalf("PollInterval = %s, want 7m", got.PollInterval)
+	}
+	if got.NextPollAt == nil || !got.NextPollAt.Equal(nextPollAt) {
+		t.Fatalf("NextPollAt = %v, want %v", got.NextPollAt, nextPollAt)
+	}
+
+	// A second upsert must overwrite, not append (single-row table).
+	if err := store.UpsertDaemonState(ctx, DaemonState{
+		UpdatedAt:    updatedAt.Add(time.Minute),
+		PollInterval: 14 * time.Minute,
+	}); err != nil {
+		t.Fatalf("UpsertDaemonState() second error = %v", err)
+	}
+	got, _, err = store.LatestDaemonState(ctx)
+	if err != nil {
+		t.Fatalf("LatestDaemonState() error = %v", err)
+	}
+	if got.PollInterval != 14*time.Minute {
+		t.Fatalf("PollInterval after upsert = %s, want 14m", got.PollInterval)
+	}
+	if got.NextPollAt != nil {
+		t.Fatalf("NextPollAt = %v, want nil after upsert without it", got.NextPollAt)
+	}
+}
+
 func openTestStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 
