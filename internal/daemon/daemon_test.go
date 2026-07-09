@@ -441,6 +441,27 @@ func TestBackoffNextDelay(t *testing.T) {
 	}
 }
 
+// Regression: a success that walks the delay down to exactly Base must fully
+// reset, so the next first failure holds at Base rather than doubling.
+func TestBackoffRecoversFullyWhenLandingOnBase(t *testing.T) {
+	backoff := Backoff{Base: 7 * time.Minute, Max: 15 * time.Minute}
+
+	if got := backoff.NextDelay(true); got != 7*time.Minute {
+		t.Fatalf("first failure = %s, want 7m", got)
+	}
+	if got := backoff.NextDelay(true); got != 14*time.Minute {
+		t.Fatalf("second failure = %s, want 14m", got)
+	}
+	// Success halves 14m -> exactly 7m (Base): must count as fully recovered.
+	if got := backoff.NextDelay(false); got != 7*time.Minute {
+		t.Fatalf("recovery = %s, want 7m", got)
+	}
+	// The next first failure must hold at Base, not jump back to 14m.
+	if got := backoff.NextDelay(true); got != 7*time.Minute {
+		t.Fatalf("post-recovery first failure = %s, want 7m", got)
+	}
+}
+
 func TestBackoffDefaults(t *testing.T) {
 	var backoff Backoff
 	if got := backoff.NextDelay(true); got != config.DefaultPollInterval {
