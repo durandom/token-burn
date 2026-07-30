@@ -5,18 +5,30 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/durandom/token-burn/internal/piauth"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 )
 
+var (
+	errPiCopilotCredentialMissing     = errors.New("Pi GitHub Copilot OAuth credential is missing")
+	errPiCopilotEnterpriseUnsupported = errors.New("Pi GitHub Enterprise Copilot credentials require the GitHub CLI")
+)
+
 const (
-	id     = "copilot"
-	source = "github_copilot"
+	id               = "copilot"
+	source           = "github_copilot"
+	piProviderID     = "github-copilot"
+	defaultGitHubURL = "https://api.github.com"
+	maxResponseBytes = 1 << 20
 )
 
 type CommandRunner interface {
@@ -24,8 +36,12 @@ type CommandRunner interface {
 }
 
 type Provider struct {
-	Runner CommandRunner
-	Now    func() time.Time
+	Runner     CommandRunner
+	HTTPClient *http.Client
+	BaseURL    string
+	Now        func() time.Time
+	HomeDir    func() (string, error)
+	Env        func(string) string
 }
 
 type execRunner struct{}
@@ -40,54 +56,70 @@ func (p *Provider) ID() string {
 
 func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usageprovider.Snapshot, error) {
 	observedAt := p.now()
-
-	user, err := p.fetchUser(ctx)
+	user, piToken, err := p.fetchUser(ctx, acct)
 	if err != nil {
 		return usageprovider.Snapshot{}, err
 	}
 	snap := mapUserResponse(user, acct, observedAt)
-
+	if piToken != "" {
+		snap.Raw["auth_source"] = "pi"
+	}
 	if user.TokenBasedBilling && user.Login != "" {
-		billing, err := p.fetchAICreditUsage(ctx, user.Login, observedAt)
+		var billing billingUsageResponse
+		if piToken != "" {
+			billing, err = p.fetchAICreditUsageHTTP(ctx, piToken, user.Login, observedAt)
+		} else {
+			billing, err = p.fetchAICreditUsageGH(ctx, user.Login, observedAt)
+		}
 		if err == nil {
 			addAICreditWindow(&snap, user, billing, observedAt)
 		} else {
 			snap.Raw["ai_credit_usage_error"] = err.Error()
 		}
 	}
-
 	return snap, nil
 }
 
-func (p *Provider) fetchUser(ctx context.Context) (userResponse, error) {
-	out, err := p.runner().Run(ctx, "gh", "api", "-H", "Cache-Control: no-cache", "-H", "Pragma: no-cache", "/copilot_internal/user")
-	if err != nil {
-		return userResponse{}, &usageprovider.Error{
-			Code:     usageprovider.ErrAuthMissing,
-			Provider: id,
-			Err:      fmt.Errorf("run gh api /copilot_internal/user: %w", err),
+func (p *Provider) fetchUser(ctx context.Context, acct usageprovider.Account) (userResponse, string, error) {
+	out, ghErr := p.runner().Run(ctx, "gh", "api", "-H", "Cache-Control: no-cache", "-H", "Pragma: no-cache", "/copilot_internal/user")
+	if ghErr == nil {
+		if user, err := parseUser(out); err == nil {
+			return user, "", nil
+		} else {
+			ghErr = err
 		}
+	}
+	token, piErr := p.readPiGitHubToken(ctx, acct)
+	if piErr != nil {
+		var providerErr *usageprovider.Error
+		if errors.As(ghErr, &providerErr) {
+			return userResponse{}, "", ghErr
+		}
+		return userResponse{}, "", copilotPiError(piErr)
 	}
 	var user userResponse
-	if err := json.Unmarshal(out, &user); err != nil {
-		return userResponse{}, &usageprovider.Error{
-			Code:     usageprovider.ErrInvalidResponse,
-			Provider: id,
-			Err:      err,
-		}
+	if err := p.getJSON(ctx, token, "/copilot_internal/user", &user); err != nil {
+		return userResponse{}, "", err
 	}
 	if strings.TrimSpace(user.Login) == "" {
-		return userResponse{}, &usageprovider.Error{
-			Code:     usageprovider.ErrInvalidResponse,
-			Provider: id,
-			Err:      errors.New("copilot user response has no login"),
-		}
+		return userResponse{}, "", &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("copilot user response has no login")}
+	}
+	return user, token, nil
+}
+
+func parseUser(out []byte) (userResponse, error) {
+	var user userResponse
+	if err := json.Unmarshal(out, &user); err != nil {
+		return userResponse{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: err}
+	}
+	if strings.TrimSpace(user.Login) == "" {
+		return userResponse{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("copilot user response has no login")}
 	}
 	return user, nil
 }
 
-func (p *Provider) fetchAICreditUsage(ctx context.Context, login string, observedAt time.Time) (billingUsageResponse, error) {
-	endpoint := fmt.Sprintf("/users/%s/settings/billing/ai_credit/usage?year=%d&month=%d", login, observedAt.UTC().Year(), int(observedAt.UTC().Month()))
+func (p *Provider) fetchAICreditUsageGH(ctx context.Context, login string, observedAt time.Time) (billingUsageResponse, error) {
+	endpoint := billingEndpoint(login, observedAt)
 	out, err := p.runner().Run(ctx, "gh", "api", "-H", "Cache-Control: no-cache", "-H", "Pragma: no-cache", endpoint)
 	if err != nil {
 		return billingUsageResponse{}, fmt.Errorf("run gh api %s: %w", endpoint, err)
@@ -97,6 +129,95 @@ func (p *Provider) fetchAICreditUsage(ctx context.Context, login string, observe
 		return billingUsageResponse{}, fmt.Errorf("parse ai credit usage response: %w", err)
 	}
 	return usage, nil
+}
+
+func (p *Provider) fetchAICreditUsageHTTP(ctx context.Context, token, login string, observedAt time.Time) (billingUsageResponse, error) {
+	var usage billingUsageResponse
+	err := p.getJSON(ctx, token, billingEndpoint(login, observedAt), &usage)
+	return usage, err
+}
+
+func billingEndpoint(login string, observedAt time.Time) string {
+	return fmt.Sprintf("/users/%s/settings/billing/ai_credit/usage?year=%d&month=%d", url.PathEscape(login), observedAt.UTC().Year(), int(observedAt.UTC().Month()))
+}
+
+func (p *Provider) readPiGitHubToken(ctx context.Context, acct usageprovider.Account) (string, error) {
+	path := piauth.ResolvePath(acct.AuthFile, p.env, p.homeDir)
+	if path == "" {
+		return "", errPiCopilotCredentialMissing
+	}
+	store, err := piauth.New(path)
+	if err != nil {
+		return "", err
+	}
+	credential, err := store.Read(ctx, piProviderID)
+	if err != nil {
+		return "", err
+	}
+	if credential.Type != "oauth" || strings.TrimSpace(credential.Refresh) == "" {
+		return "", errPiCopilotCredentialMissing
+	}
+	if strings.TrimSpace(credential.EnterpriseURL) != "" {
+		// Never send an enterprise-scoped token to public api.github.com.
+		// The preferred gh path already handles enterprise host routing.
+		return "", errPiCopilotEnterpriseUnsupported
+	}
+	return strings.TrimSpace(credential.Refresh), nil
+}
+
+func copilotPiError(err error) error {
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, piauth.ErrCredentialNotFound) {
+		return &usageprovider.Error{Code: usageprovider.ErrAuthMissing, Provider: id, Err: errors.New("GitHub CLI unavailable and Pi Copilot credentials not found")}
+	}
+	if errors.Is(err, piauth.ErrLockUnavailable) || errors.Is(err, piauth.ErrLockCompromised) {
+		return &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, Err: err}
+	}
+	if errors.Is(err, errPiCopilotCredentialMissing) {
+		return &usageprovider.Error{Code: usageprovider.ErrAuthMissing, Provider: id, Err: err}
+	}
+	if errors.Is(err, errPiCopilotEnterpriseUnsupported) {
+		return &usageprovider.Error{Code: usageprovider.ErrUnsupportedAccountShape, Provider: id, Err: err}
+	}
+	return &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: err}
+}
+
+func (p *Provider) getJSON(ctx context.Context, token, endpoint string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.baseURL(), "/")+endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("create GitHub request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "token-burn")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+	resp, err := p.httpClient().Do(req)
+	if err != nil {
+		return &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, Err: errors.New("GitHub request failed")}
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil || len(body) > maxResponseBytes {
+		return &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("invalid GitHub response body")}
+	}
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		return &usageprovider.Error{Code: usageprovider.ErrAuthExpired, Provider: id, HTTPStatus: resp.StatusCode}
+	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden && githubRateLimited(resp):
+		return &usageprovider.Error{Code: usageprovider.ErrRateLimited, Provider: id, HTTPStatus: resp.StatusCode}
+	case resp.StatusCode == http.StatusForbidden:
+		return &usageprovider.Error{Code: usageprovider.ErrAuthMissing, Provider: id, HTTPStatus: resp.StatusCode, Err: errors.New("GitHub token lacks permission for Copilot usage")}
+	case resp.StatusCode < 200 || resp.StatusCode > 299:
+		return &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, HTTPStatus: resp.StatusCode}
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("invalid GitHub JSON")}
+	}
+	return nil
+}
+
+func githubRateLimited(resp *http.Response) bool {
+	return strings.TrimSpace(resp.Header.Get("Retry-After")) != "" || strings.TrimSpace(resp.Header.Get("X-RateLimit-Remaining")) == "0"
 }
 
 func mapUserResponse(user userResponse, acct usageprovider.Account, observedAt time.Time) usageprovider.Snapshot {
@@ -314,6 +435,37 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (p *Provider) httpClient() *http.Client {
+	base := p.HTTPClient
+	if base == nil {
+		base = &http.Client{Timeout: 15 * time.Second}
+	}
+	client := *base
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	return &client
+}
+
+func (p *Provider) baseURL() string {
+	if p.BaseURL != "" {
+		return p.BaseURL
+	}
+	return defaultGitHubURL
+}
+
+func (p *Provider) homeDir() (string, error) {
+	if p.HomeDir != nil {
+		return p.HomeDir()
+	}
+	return os.UserHomeDir()
+}
+
+func (p *Provider) env(key string) string {
+	if p.Env != nil {
+		return p.Env(key)
+	}
+	return os.Getenv(key)
 }
 
 func (p *Provider) runner() CommandRunner {

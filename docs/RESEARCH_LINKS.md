@@ -20,6 +20,8 @@ libraries. `token-burn` does not import OpenUsage internals.
   https://github.com/robinebers/openusage/blob/main/docs/providers/codex.md
 - codex-lb issue explaining `/wham/usage` vs Settings UI divergence:
   https://github.com/Soju06/codex-lb/issues/678
+- Pi OpenAI Codex OAuth implementation and credential refresh behavior:
+  https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/auth/oauth/openai-codex.ts
 
 ## Claude Code
 
@@ -45,6 +47,9 @@ libraries. `token-burn` does not import OpenUsage internals.
 - Local `gh api /copilot_internal/user` probing showed Copilot quota snapshots
   for chat, completions, and premium interactions. This endpoint is internal and
   undocumented.
+- Pi GitHub Copilot OAuth implementation documents its GitHub-token/Copilot-token
+  credential shape:
+  https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/auth/oauth/github-copilot.ts
 
 ## Google Antigravity
 
@@ -56,6 +61,20 @@ libraries. `token-burn` does not import OpenUsage internals.
   https://github.com/skainguyen1412/antigravity-usage
 - Antigravity Usage Checker:
   https://github.com/tungcorn/antigravity-usage-checker
+
+## xAI/Grok
+
+- xAI Grok usage and limits FAQ:
+  https://docs.x.ai/grok/faq#usage--limits
+- Pi xAI subscription OAuth provider documentation:
+  https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/providers.md
+- Pi xAI OAuth implementation:
+  https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/auth/oauth/xai.ts
+- Experimental Grok CLI usage implementation and reviewed wire contract:
+  https://github.com/BlockedPath/pi-xai-oauth/blob/main/extensions/xai/usage.ts
+  https://github.com/BlockedPath/pi-xai-oauth/blob/main/extensions/xai/wire.ts
+- xAI API and Grok subscription billing are separate:
+  https://docs.x.ai/console/faq/accounts
 
 ## Combined Tools
 

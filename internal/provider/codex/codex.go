@@ -7,24 +7,33 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/durandom/token-burn/internal/piauth"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 )
 
 const (
-	id             = "codex"
-	defaultBaseURL = "https://chatgpt.com/backend-api"
-	source         = "wham_usage"
+	id                   = "codex"
+	defaultBaseURL       = "https://chatgpt.com/backend-api"
+	defaultOAuthURL      = "https://auth.openai.com/oauth/token"
+	openAIOAuthClientID  = "app_EMoamEEZ73f0CkXaXp7hrann"
+	source               = "wham_usage"
+	piProviderID         = "openai-codex"
+	piRefreshSkew        = 5 * time.Minute
+	maxResponseBytes     = 1 << 20
+	maxTokenLifetimeSecs = int64(30 * 24 * time.Hour / time.Second)
 )
 
 type Provider struct {
 	HTTPClient *http.Client
 	BaseURL    string
+	OAuthURL   string
 	Now        func() time.Time
 	HomeDir    func() (string, error)
 	Env        func(string) string
@@ -38,86 +47,241 @@ func (p *Provider) ID() string {
 	return id
 }
 
+type resolvedCredential struct {
+	Access    string
+	AccountID string
+	PiStore   *piauth.Store
+}
+
 func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usageprovider.Snapshot, error) {
 	observedAt := p.now()
-	auth, path, err := p.readAuth(acct)
+	credential, err := p.resolveCredential(ctx, acct, observedAt)
 	if err != nil {
 		return usageprovider.Snapshot{}, err
 	}
-	if strings.TrimSpace(auth.Tokens.AccessToken) == "" {
-		return usageprovider.Snapshot{}, &usageprovider.Error{
-			Code:     usageprovider.ErrAuthMissing,
-			Provider: id,
-			Err:      fmt.Errorf("codex auth file %s does not contain an access token", path),
+	payload, err := p.fetchUsage(ctx, credential)
+	if isAuthExpired(err) && credential.PiStore != nil {
+		credential, err = p.refreshPiCredential(ctx, credential, true, observedAt)
+		if err == nil {
+			payload, err = p.fetchUsage(ctx, credential)
 		}
 	}
+	if err != nil {
+		return usageprovider.Snapshot{}, err
+	}
+	return mapUsagePayload(payload, acct, observedAt)
+}
 
+func (p *Provider) fetchUsage(ctx context.Context, credential resolvedCredential) (usagePayload, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.baseURL(), "/")+"/wham/usage", nil)
 	if err != nil {
-		return usageprovider.Snapshot{}, fmt.Errorf("codex create usage request: %w", err)
+		return usagePayload{}, fmt.Errorf("codex create usage request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+auth.Tokens.AccessToken)
+	req.Header.Set("Authorization", "Bearer "+credential.Access)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "token-burn")
-
-	headerAccountID := firstNonEmpty(auth.Tokens.AccountID, auth.AccountID, acct.ProviderAccountID)
-	if headerAccountID != "" {
-		req.Header.Set("ChatGPT-Account-Id", headerAccountID)
+	if credential.AccountID != "" {
+		req.Header.Set("ChatGPT-Account-Id", credential.AccountID)
 	}
-
 	resp, err := p.httpClient().Do(req)
 	if err != nil {
-		return usageprovider.Snapshot{}, &usageprovider.Error{
-			Code:     usageprovider.ErrTransientHTTPFailure,
-			Provider: id,
-			Err:      err,
-		}
+		return usagePayload{}, &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, Err: err}
 	}
 	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
-		return usageprovider.Snapshot{}, fmt.Errorf("codex read usage response: %w", err)
+		return usagePayload{}, fmt.Errorf("codex read usage response: %w", err)
+	}
+	if len(body) > maxResponseBytes {
+		return usagePayload{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("usage response exceeds size limit")}
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return usageprovider.Snapshot{}, &usageprovider.Error{
-			Code:       usageprovider.ErrAuthExpired,
-			Provider:   id,
-			HTTPStatus: resp.StatusCode,
-		}
+		return usagePayload{}, &usageprovider.Error{Code: usageprovider.ErrAuthExpired, Provider: id, HTTPStatus: resp.StatusCode}
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return usageprovider.Snapshot{}, &usageprovider.Error{
-			Code:       usageprovider.ErrRateLimited,
-			Provider:   id,
-			HTTPStatus: resp.StatusCode,
-		}
+		return usagePayload{}, &usageprovider.Error{Code: usageprovider.ErrRateLimited, Provider: id, HTTPStatus: resp.StatusCode}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return usageprovider.Snapshot{}, &usageprovider.Error{
-			Code:       usageprovider.ErrTransientHTTPFailure,
-			Provider:   id,
-			HTTPStatus: resp.StatusCode,
-			Err:        fmt.Errorf("unexpected status: %s", truncate(string(body), 256)),
-		}
+		return usagePayload{}, &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, HTTPStatus: resp.StatusCode, Err: errors.New("unexpected usage response status")}
 	}
-
 	var payload usagePayload
 	dec := json.NewDecoder(strings.NewReader(string(body)))
 	dec.UseNumber()
 	if err := dec.Decode(&payload); err != nil {
-		return usageprovider.Snapshot{}, &usageprovider.Error{
-			Code:     usageprovider.ErrInvalidResponse,
-			Provider: id,
-			Err:      err,
+		return usagePayload{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: err}
+	}
+	return payload, nil
+}
+
+func (p *Provider) resolveCredential(ctx context.Context, acct usageprovider.Account, now time.Time) (resolvedCredential, error) {
+	if strings.TrimSpace(acct.AuthFile) != "" {
+		path := expandHome(acct.AuthFile, p.homeDir)
+		if native, ok, err := readNativeAuthPath(path); err != nil {
+			return resolvedCredential{}, err
+		} else if ok {
+			return resolvedCredential{Access: native.Tokens.AccessToken, AccountID: firstNonEmpty(native.Tokens.AccountID, native.AccountID, acct.ProviderAccountID)}, nil
+		}
+		if credential, err := p.readPiCredential(ctx, path, now); err == nil {
+			credential.AccountID = firstNonEmpty(credential.AccountID, acct.ProviderAccountID)
+			return credential, nil
+		} else if !isPiMissing(err) {
+			return resolvedCredential{}, err
 		}
 	}
 
-	snap, err := mapUsagePayload(payload, acct, observedAt)
-	if err != nil {
-		return usageprovider.Snapshot{}, err
+	nativeAcct := acct
+	nativeAcct.AuthFile = ""
+	if native, _, err := p.readAuth(nativeAcct); err == nil {
+		return resolvedCredential{Access: native.Tokens.AccessToken, AccountID: firstNonEmpty(native.Tokens.AccountID, native.AccountID, acct.ProviderAccountID)}, nil
+	} else {
+		var providerErr *usageprovider.Error
+		if errors.As(err, &providerErr) && providerErr.Code != usageprovider.ErrAuthMissing {
+			return resolvedCredential{}, err
+		}
 	}
-	return snap, nil
+	path := piauth.ResolvePath("", p.env, p.homeDir)
+	if path != "" {
+		if credential, err := p.readPiCredential(ctx, path, now); err == nil {
+			credential.AccountID = firstNonEmpty(credential.AccountID, acct.ProviderAccountID)
+			return credential, nil
+		} else if !isPiMissing(err) {
+			return resolvedCredential{}, err
+		}
+	}
+	return resolvedCredential{}, &usageprovider.Error{Code: usageprovider.ErrAuthMissing, Provider: id, Err: errors.New("Codex credentials not found; run codex login or /login openai-codex in Pi")}
+}
+
+func readNativeAuthPath(path string) (authFile, bool, error) {
+	data, err := readCredentialFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return authFile{}, false, nil
+	}
+	if err != nil {
+		return authFile{}, false, fmt.Errorf("codex read auth file %s: %w", path, err)
+	}
+	var auth authFile
+	if err := json.Unmarshal(data, &auth); err != nil {
+		return authFile{}, false, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: fmt.Errorf("parse codex auth file %s: %w", path, err)}
+	}
+	return auth, strings.TrimSpace(auth.Tokens.AccessToken) != "", nil
+}
+
+func readCredentialFile(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxResponseBytes {
+		return nil, errors.New("credential file exceeds 1 MiB limit")
+	}
+	return data, nil
+}
+
+func (p *Provider) readPiCredential(ctx context.Context, path string, now time.Time) (resolvedCredential, error) {
+	store, err := piauth.New(path)
+	if err != nil {
+		return resolvedCredential{}, piAuthError(err)
+	}
+	credential, err := store.Read(ctx, piProviderID)
+	if err != nil {
+		return resolvedCredential{}, piAuthError(err)
+	}
+	if credential.Type != "oauth" || strings.TrimSpace(credential.Access) == "" {
+		return resolvedCredential{}, &usageprovider.Error{Code: usageprovider.ErrAuthMissing, Provider: id, Err: errors.New("Pi OpenAI Codex OAuth credentials required")}
+	}
+	resolved := resolvedCredential{Access: credential.Access, AccountID: credential.AccountID, PiStore: store}
+	if credential.Expires > 0 && credential.Expires <= now.Add(piRefreshSkew).UnixMilli() {
+		return p.refreshPiCredential(ctx, resolved, false, now)
+	}
+	return resolved, nil
+}
+
+func (p *Provider) refreshPiCredential(ctx context.Context, rejected resolvedCredential, force bool, now time.Time) (resolvedCredential, error) {
+	result, err := rejected.PiStore.Modify(ctx, piProviderID, func(lockCtx context.Context, current piauth.OAuthCredential) (*piauth.OAuthCredential, error) {
+		if current.Type != "oauth" || strings.TrimSpace(current.Access) == "" || strings.TrimSpace(current.Refresh) == "" {
+			return nil, &usageprovider.Error{Code: usageprovider.ErrAuthExpired, Provider: id, Err: errors.New("Pi OpenAI Codex OAuth refresh credentials are missing")}
+		}
+		if current.Access != rejected.Access {
+			return nil, nil
+		}
+		if !force && (current.Expires == 0 || current.Expires > now.Add(piRefreshSkew).UnixMilli()) {
+			return nil, nil
+		}
+		refreshed, err := p.requestPiRefresh(lockCtx, current, now)
+		if err != nil {
+			return nil, err
+		}
+		return &refreshed, nil
+	})
+	if err != nil {
+		return resolvedCredential{}, piAuthError(err)
+	}
+	return resolvedCredential{Access: result.Access, AccountID: result.AccountID, PiStore: rejected.PiStore}, nil
+}
+
+func (p *Provider) requestPiRefresh(ctx context.Context, current piauth.OAuthCredential, now time.Time) (piauth.OAuthCredential, error) {
+	form := url.Values{"grant_type": {"refresh_token"}, "client_id": {openAIOAuthClientID}, "refresh_token": {current.Refresh}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.oauthURL(), strings.NewReader(form.Encode()))
+	if err != nil {
+		return piauth.OAuthCredential{}, fmt.Errorf("codex create OAuth refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	resp, err := p.httpClient().Do(req)
+	if err != nil {
+		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, Err: errors.New("OAuth refresh request failed")}
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil || len(body) > maxResponseBytes {
+		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("invalid OAuth refresh response")}
+	}
+	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrAuthExpired, Provider: id, HTTPStatus: resp.StatusCode}
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrRateLimited, Provider: id, HTTPStatus: resp.StatusCode}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, HTTPStatus: resp.StatusCode}
+	}
+	var payload struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || strings.TrimSpace(payload.AccessToken) == "" || strings.TrimSpace(payload.RefreshToken) == "" || payload.ExpiresIn <= 0 || payload.ExpiresIn > maxTokenLifetimeSecs {
+		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("invalid OAuth refresh payload")}
+	}
+	return piauth.OAuthCredential{Type: "oauth", Access: strings.TrimSpace(payload.AccessToken), Refresh: strings.TrimSpace(payload.RefreshToken), Expires: now.Add(time.Duration(payload.ExpiresIn) * time.Second).UnixMilli(), AccountID: current.AccountID}, nil
+}
+
+func isPiMissing(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, piauth.ErrCredentialNotFound)
+}
+
+func piAuthError(err error) error {
+	var providerErr *usageprovider.Error
+	if errors.As(err, &providerErr) {
+		return err
+	}
+	if isPiMissing(err) {
+		return &usageprovider.Error{Code: usageprovider.ErrAuthMissing, Provider: id, Err: errors.New("Pi OpenAI Codex OAuth credentials not found")}
+	}
+	if errors.Is(err, piauth.ErrLockUnavailable) || errors.Is(err, piauth.ErrLockCompromised) {
+		return &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, Err: err}
+	}
+	return &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: err}
+}
+
+func isAuthExpired(err error) bool {
+	var providerErr *usageprovider.Error
+	return errors.As(err, &providerErr) && providerErr.Code == usageprovider.ErrAuthExpired
 }
 
 func (p *Provider) readAuth(acct usageprovider.Account) (authFile, string, error) {
@@ -125,7 +289,7 @@ func (p *Provider) readAuth(acct usageprovider.Account) (authFile, string, error
 		if strings.TrimSpace(path) == "" {
 			continue
 		}
-		data, err := os.ReadFile(path)
+		data, err := readCredentialFile(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -139,6 +303,9 @@ func (p *Provider) readAuth(acct usageprovider.Account) (authFile, string, error
 				Provider: id,
 				Err:      fmt.Errorf("parse codex auth file %s: %w", path, err),
 			}
+		}
+		if strings.TrimSpace(auth.Tokens.AccessToken) == "" {
+			continue
 		}
 		return auth, path, nil
 	}
@@ -301,10 +468,13 @@ func resolveWindowSeconds(info *usageWindowInfo) *int {
 }
 
 func (p *Provider) httpClient() *http.Client {
-	if p.HTTPClient != nil {
-		return p.HTTPClient
+	base := p.HTTPClient
+	if base == nil {
+		base = &http.Client{Timeout: 15 * time.Second}
 	}
-	return &http.Client{Timeout: 15 * time.Second}
+	client := *base
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	return &client
 }
 
 func (p *Provider) baseURL() string {
@@ -312,6 +482,13 @@ func (p *Provider) baseURL() string {
 		return p.BaseURL
 	}
 	return defaultBaseURL
+}
+
+func (p *Provider) oauthURL() string {
+	if p.OAuthURL != "" {
+		return p.OAuthURL
+	}
+	return defaultOAuthURL
 }
 
 func (p *Provider) now() time.Time {
@@ -398,11 +575,4 @@ func stableWindowOrder(windows map[string]usageprovider.Window) []string {
 	}
 	sort.Strings(out[len(out)-(len(windows)-len(seen)):])
 	return out
-}
-
-func truncate(value string, max int) string {
-	if len(value) <= max {
-		return value
-	}
-	return value[:max]
 }

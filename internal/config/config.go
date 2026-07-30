@@ -71,6 +71,7 @@ func Default() Config {
 			{Provider: "claude", ID: "claude-default"},
 			{Provider: "copilot", ID: "copilot-default"},
 			{Provider: "antigravity", ID: "antigravity-default"},
+			{Provider: "xai", ID: "xai-default"},
 		},
 	}
 }
@@ -224,5 +225,9 @@ id = "copilot-default"
 [[accounts]]
 provider = "antigravity"
 id = "antigravity-default"
+
+[[accounts]]
+provider = "xai"
+id = "xai-default"
 `, DefaultDatabasePath())
 }

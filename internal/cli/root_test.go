@@ -11,6 +11,13 @@ import (
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 )
 
+func TestProviderForXAI(t *testing.T) {
+	provider, ok := providerFor("grok")
+	if !ok || provider.ID() != "xai" {
+		t.Fatalf("providerFor(grok) = %#v, %t", provider, ok)
+	}
+}
+
 func TestVersionCommand(t *testing.T) {
 	cmd := NewRootCommand(BuildInfo{
 		Version: "v0.1.0",
