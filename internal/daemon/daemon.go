@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -28,17 +29,32 @@ type Options struct {
 	Now                    func() time.Time
 	CommandRunner          CommandRunner
 	CredentialRefreshState *CredentialRefreshState
+	// Verbose, when non-nil, receives diagnostic lines (rate-limit skips,
+	// credential auto-refresh, backoff timing). Under systemd this is the
+	// process stdout, so lines land in the journal and systemctl status.
+	Verbose io.Writer
+}
+
+func (o Options) logf(format string, args ...any) {
+	if o.Verbose == nil {
+		return
+	}
+	fmt.Fprintf(o.Verbose, "verbose: "+format+"\n", args...)
 }
 
 type Backoff struct {
-	Base     time.Duration
-	Max      time.Duration
-	failures int
+	Base    time.Duration
+	Max     time.Duration
+	current time.Duration // active backoff; 0 == steady state (no backoff)
 }
 
 type PollResult struct {
 	Snapshots []usageprovider.Snapshot
 	Errors    []PollError
+}
+
+func (o Options) logPollCycle(result PollResult, failed bool, delay time.Duration) {
+	o.logf("poll cycle: snapshots=%d errors=%d poll_failed=%t next_poll_in=%s", len(result.Snapshots), len(result.Errors), failed, delay)
 }
 
 type PollError struct {
@@ -104,7 +120,9 @@ func Run(ctx context.Context, opts Options) error {
 		if err != nil {
 			return err
 		}
-		delay := backoff.NextDelay(shouldBackoff(result))
+		failed := shouldBackoff(result)
+		delay := backoff.NextDelay(failed)
+		opts.logPollCycle(result, failed, delay)
 		now := opts.now()
 		nextPollAt := now.Add(delay)
 		if err := db.UpsertDaemonState(ctx, store.DaemonState{UpdatedAt: now, PollInterval: delay, NextPollAt: &nextPollAt}); err != nil {
@@ -131,22 +149,32 @@ func (b *Backoff) NextDelay(failed bool) time.Duration {
 	if b.Max <= 0 {
 		b.Max = 15 * time.Minute
 	}
+	// current == 0 is the steady state (no active backoff). It is kept
+	// distinct from current == Base (a first failure, primed to double) so a
+	// recovery that lands exactly on Base resets fully instead of doubling on
+	// the next failure.
 	if !failed {
-		b.failures = 0
-		return b.Base
-	}
-	b.failures++
-	delay := b.Base
-	for i := 1; i < b.failures; i++ {
-		delay *= 2
-		if delay >= b.Max {
-			return b.Max
+		// Multiplicative decrease: probe back toward Base, then steady state.
+		if b.current <= 0 {
+			return b.Base
 		}
+		b.current /= 2
+		if b.current <= b.Base {
+			b.current = 0
+			return b.Base
+		}
+		return b.current
 	}
-	if delay > b.Max {
-		return b.Max
+	// Multiplicative increase: first failure holds at Base, then doubles.
+	if b.current <= 0 {
+		b.current = b.Base
+	} else {
+		b.current *= 2
 	}
-	return delay
+	if b.current > b.Max {
+		b.current = b.Max
+	}
+	return b.current
 }
 
 func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, error) {
@@ -154,11 +182,12 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 	now := opts.now()
 	for _, acct := range opts.Config.Accounts {
 		startedAt := opts.now()
-		skip, err := shouldSkipRateLimitedAccount(ctx, db, acct.Provider, acct.ID, startedAt, opts.Config.PollInterval)
+		skip, cooldownRemaining, err := shouldSkipRateLimitedAccount(ctx, db, acct.Provider, acct.ID, startedAt, opts.Config.PollInterval)
 		if err != nil {
 			return result, err
 		}
 		if skip {
+			opts.logf("%s/%s rate-limited: skipping poll, cooldown remaining=%s", acct.Provider, acct.ID, cooldownRemaining.Round(time.Second))
 			continue
 		}
 		client, ok := opts.providerFor(acct.Provider)
@@ -184,7 +213,9 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 		})
 		if err != nil {
 			pollErr := pollErrorFrom(acct.Provider, acct.ID, err)
+			opts.logf("%s/%s fetch error: code=%s http=%d", acct.Provider, acct.ID, orNone(pollErr.Code), pollErr.HTTPStatus)
 			if shouldAttemptCredentialRefresh(opts, pollErr, startedAt) {
+				opts.logf("%s/%s auth expired: attempting credential auto-refresh", acct.Provider, acct.ID)
 				markCredentialRefreshAttempt(opts, pollErr, startedAt)
 				if refreshErr := refreshCredentials(ctx, opts, pollErr); refreshErr == nil {
 					snap, err = client.Fetch(ctx, usageprovider.Account{
@@ -195,6 +226,7 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 						CredentialsFile:   acct.CredentialsFile,
 					})
 					if err == nil {
+						opts.logf("%s/%s credential auto-refresh succeeded: fetch recovered", acct.Provider, acct.ID)
 						if err := db.InsertSnapshot(ctx, snap, store.InsertOptions{}); err != nil {
 							return result, err
 						}
@@ -202,6 +234,7 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 							return result, err
 						}
 						result.Snapshots = append(result.Snapshots, snap)
+						opts.logSnapshot(snap, now)
 						if opts.Recorder != nil {
 							otel.EmitSnapshot(ctx, opts.Recorder, snap, now)
 							emitForecasts(ctx, opts.Recorder, db, snap, now)
@@ -209,6 +242,9 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 						continue
 					}
 					pollErr = pollErrorFrom(acct.Provider, acct.ID, err)
+					opts.logf("%s/%s credential auto-refresh ran but fetch still failing: code=%s http=%d", acct.Provider, acct.ID, orNone(pollErr.Code), pollErr.HTTPStatus)
+				} else {
+					opts.logf("%s/%s credential auto-refresh failed: %s", acct.Provider, acct.ID, redactErrorMessage(refreshErr))
 				}
 			}
 			result.Errors = append(result.Errors, pollErr)
@@ -227,12 +263,37 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 			return result, err
 		}
 		result.Snapshots = append(result.Snapshots, snap)
+		opts.logSnapshot(snap, now)
 		if opts.Recorder != nil {
 			otel.EmitSnapshot(ctx, opts.Recorder, snap, now)
 			emitForecasts(ctx, opts.Recorder, db, snap, now)
 		}
 	}
 	return result, nil
+}
+
+func (o Options) logSnapshot(snap usageprovider.Snapshot, now time.Time) {
+	if o.Verbose == nil {
+		return
+	}
+	for _, win := range snap.Windows {
+		msg := fmt.Sprintf("%s/%s window %s: used=%.1f%%", snap.Provider, snap.AccountID, win.Name, win.UsedPercent)
+		if win.RemainingPercent != nil {
+			msg += fmt.Sprintf(" remaining=%.1f%%", *win.RemainingPercent)
+		}
+		if win.ResetAt != nil {
+			msg += fmt.Sprintf(" reset_in=%s", win.ResetAt.Sub(now).Round(time.Second))
+		}
+		msg += fmt.Sprintf(" limit_reached=%t", win.LimitReached)
+		o.logf("%s", msg)
+	}
+}
+
+func orNone(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "none"
+	}
+	return s
 }
 
 func shouldAttemptCredentialRefresh(opts Options, pollErr PollError, now time.Time) bool {
@@ -291,13 +352,13 @@ func providerRateLimitBaseCooldown(pollInterval time.Duration) time.Duration {
 	return cooldown
 }
 
-func shouldSkipRateLimitedAccount(ctx context.Context, db *store.Store, providerName, accountID string, now time.Time, pollInterval time.Duration) (bool, error) {
+func shouldSkipRateLimitedAccount(ctx context.Context, db *store.Store, providerName, accountID string, now time.Time, pollInterval time.Duration) (bool, time.Duration, error) {
 	if pollInterval <= 0 {
 		pollInterval = config.DefaultPollInterval
 	}
 	baseCooldown := providerRateLimitBaseCooldown(pollInterval)
 	if baseCooldown <= 0 {
-		return false, nil
+		return false, 0, nil
 	}
 	since := now.Add(-maxRateLimitCooldown)
 	runs, err := db.PollRuns(ctx, store.PollRunFilter{
@@ -306,16 +367,20 @@ func shouldSkipRateLimitedAccount(ctx context.Context, db *store.Store, provider
 		Since:     &since,
 	})
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	if len(runs) == 0 {
-		return false, nil
+		return false, 0, nil
 	}
 	cooldown, latest := rateLimitCooldownForRuns(runs, baseCooldown, maxRateLimitCooldown)
 	if cooldown <= 0 {
-		return false, nil
+		return false, 0, nil
 	}
-	return now.Sub(latest.StartedAt) < cooldown, nil
+	remaining := cooldown - now.Sub(latest.StartedAt)
+	if remaining <= 0 {
+		return false, 0, nil
+	}
+	return true, remaining, nil
 }
 
 func rateLimitCooldownForRuns(runs []store.PollRun, baseCooldown, maxCooldown time.Duration) (time.Duration, store.PollRun) {

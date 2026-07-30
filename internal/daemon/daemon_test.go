@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -301,6 +302,7 @@ func TestPollOnceRefreshesAntigravityCredentialsAndRetries(t *testing.T) {
 		},
 	}
 	runner := &fakeCommandRunner{}
+	var verbose bytes.Buffer
 	result, err := PollOnce(ctx, db, Options{
 		Config: config.Config{
 			Accounts: []config.Account{{Provider: "antigravity", ID: "antigravity-default"}},
@@ -309,6 +311,7 @@ func TestPollOnceRefreshesAntigravityCredentialsAndRetries(t *testing.T) {
 		CommandRunner:          runner,
 		CredentialRefreshState: &CredentialRefreshState{},
 		Now:                    func() time.Time { return now },
+		Verbose:                &verbose,
 	})
 	if err != nil {
 		t.Fatalf("PollOnce() error = %v", err)
@@ -322,12 +325,55 @@ func TestPollOnceRefreshesAntigravityCredentialsAndRetries(t *testing.T) {
 	if len(result.Errors) != 0 || len(result.Snapshots) != 1 {
 		t.Fatalf("result = %#v, want one retried snapshot and no errors", result)
 	}
+	if got := verbose.String(); !strings.Contains(got, "window gemini: used=0.0%") {
+		t.Fatalf("verbose output %q missing recovered snapshot window", got)
+	}
 	runs, err := db.PollRuns(ctx, store.PollRunFilter{Provider: "antigravity", AccountID: "antigravity-default"})
 	if err != nil {
 		t.Fatalf("PollRuns() error = %v", err)
 	}
 	if len(runs) != 1 || runs[0].Status != "success" {
 		t.Fatalf("poll runs = %#v, want one success", runs)
+	}
+}
+
+func TestPollOnceRedactsCredentialRefreshFailure(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/token-burn.db")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	provider := &sequenceProvider{
+		id:   "antigravity",
+		errs: []error{&usageprovider.Error{Code: usageprovider.ErrAuthExpired, Provider: "antigravity"}},
+	}
+	runner := &fakeCommandRunner{err: errString("Bearer secret-token")}
+	var verbose bytes.Buffer
+	result, err := PollOnce(ctx, db, Options{
+		Config: config.Config{
+			Accounts: []config.Account{{Provider: "antigravity", ID: "antigravity-default"}},
+		},
+		Providers:              map[string]usageprovider.Provider{"antigravity": provider},
+		CommandRunner:          runner,
+		CredentialRefreshState: &CredentialRefreshState{},
+		Now:                    func() time.Time { return now },
+		Verbose:                &verbose,
+	})
+	if err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("errors = %d, want 1", len(result.Errors))
+	}
+	got := verbose.String()
+	if strings.Contains(got, "secret-token") {
+		t.Fatalf("verbose output leaked credential: %q", got)
+	}
+	if !strings.Contains(got, "credential auto-refresh failed: [REDACTED]") {
+		t.Fatalf("verbose output %q missing redacted refresh failure", got)
 	}
 }
 
@@ -515,8 +561,35 @@ func TestBackoffNextDelay(t *testing.T) {
 	if got := backoff.NextDelay(true); got != 5*time.Minute {
 		t.Fatalf("capped failure delay = %s, want 5m", got)
 	}
+	if got := backoff.NextDelay(false); got != 2*time.Minute+30*time.Second {
+		t.Fatalf("first recovery delay = %s, want 2m30s", got)
+	}
+	if got := backoff.NextDelay(false); got != time.Minute+15*time.Second {
+		t.Fatalf("second recovery delay = %s, want 1m15s", got)
+	}
 	if got := backoff.NextDelay(false); got != time.Minute {
-		t.Fatalf("reset success delay = %s, want 1m", got)
+		t.Fatalf("steady-state delay = %s, want 1m", got)
+	}
+}
+
+// Regression: a success that walks the delay down to exactly Base must fully
+// reset, so the next first failure holds at Base rather than doubling.
+func TestBackoffRecoversFullyWhenLandingOnBase(t *testing.T) {
+	backoff := Backoff{Base: 7 * time.Minute, Max: 15 * time.Minute}
+
+	if got := backoff.NextDelay(true); got != 7*time.Minute {
+		t.Fatalf("first failure = %s, want 7m", got)
+	}
+	if got := backoff.NextDelay(true); got != 14*time.Minute {
+		t.Fatalf("second failure = %s, want 14m", got)
+	}
+	// Success halves 14m -> exactly 7m (Base): must count as fully recovered.
+	if got := backoff.NextDelay(false); got != 7*time.Minute {
+		t.Fatalf("recovery = %s, want 7m", got)
+	}
+	// The next first failure must hold at Base, not jump back to 14m.
+	if got := backoff.NextDelay(true); got != 7*time.Minute {
+		t.Fatalf("post-recovery first failure = %s, want 7m", got)
 	}
 }
 
@@ -543,6 +616,22 @@ func TestShouldBackoffOnlyWhenWholePollFails(t *testing.T) {
 		Snapshots: []usageprovider.Snapshot{{Provider: "claude"}},
 	}) {
 		t.Fatal("successful poll should not back off")
+	}
+}
+
+func TestLogPollCycleUsesPollFailedLabel(t *testing.T) {
+	var verbose bytes.Buffer
+	opts := Options{Verbose: &verbose}
+	opts.logPollCycle(PollResult{
+		Errors: []PollError{{Provider: "claude"}},
+	}, true, 10*time.Minute)
+
+	got := verbose.String()
+	if !strings.Contains(got, "snapshots=0 errors=1 poll_failed=true next_poll_in=10m0s") {
+		t.Fatalf("poll cycle diagnostic = %q", got)
+	}
+	if strings.Contains(got, "backoff=") {
+		t.Fatalf("poll cycle diagnostic retains misleading label: %q", got)
 	}
 }
 
