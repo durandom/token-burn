@@ -1,7 +1,7 @@
 # token-burn
 
 Live AI coding subscription quota monitor for Codex/OpenAI, Claude Code,
-GitHub Copilot, and Google Antigravity.
+GitHub Copilot, Google Antigravity, and xAI/Grok.
 
 `token-burn` is a small local daemon, CLI, and terminal dashboard for watching
 real provider-reported quota usage, reset times, burn rate, and forecasted
@@ -28,15 +28,17 @@ other machines.
   `gh api /copilot_internal/user` and GitHub billing usage endpoints
 - Google Antigravity model quota usage via existing Antigravity OAuth state and
   Google Cloud Code usage endpoints
+- xAI/Grok subscription usage via Pi's xAI OAuth session and the experimental,
+  undocumented Grok CLI billing endpoint
 
 These endpoints and credential files are not stable public APIs. Expect sharp
 edges and occasional breakage.
 
 ## What It Does
 
-- Monitors live Codex/OpenAI, Claude Code, GitHub Copilot, and Google
-  Antigravity subscription quota usage.
-- Polls provider usage APIs on a gentle interval, defaulting to 60 seconds.
+- Monitors live Codex/OpenAI, Claude Code, GitHub Copilot, Google Antigravity,
+  and xAI/Grok subscription quota usage.
+- Polls provider usage APIs on a gentle interval, defaulting to five minutes.
 - Stores every observed quota window in local SQLite for history.
 - Shows current quota state in a fast terminal UI dashboard.
 - Forecasts burn rate, exhaustion time, and projected percent at reset.
@@ -47,8 +49,8 @@ edges and occasional breakage.
 
 ## Use Cases
 
-- See whether a Codex, Claude Code, GitHub Copilot, or Google Antigravity
-  subscription will hit a usage limit before its reset time.
+- See whether a Codex, Claude Code, GitHub Copilot, Google Antigravity, or
+  xAI/Grok subscription will hit a usage limit before its reset time.
 - Track quota usage from all machines on the same provider account, not just the
   current workstation.
 - Export AI coding subscription usage metrics into OpenTelemetry, OpenObserve,
@@ -62,7 +64,7 @@ edges and occasional breakage.
 - The provider is the source of truth.
 - The local database is history, not authority.
 - Authentication belongs to Codex, Claude Code, GitHub CLI, Google Antigravity,
-  and the OS credential store.
+  Pi, and the OS credential store.
 - OpenTelemetry is the integration path for serious dashboards and retention.
 - The default experience should work on a normal logged-in workstation.
 - The TUI should be glanceable: the bar is the analog clock, text is the
@@ -124,8 +126,8 @@ TOKEN_BURN_INSTALL_DIR=/usr/local/bin sh scripts/install.sh
 Requirements:
 
 - Go 1.26+
-- A logged-in Codex, Claude Code, GitHub CLI, and/or Google Antigravity
-  installation
+- A logged-in Codex, Claude Code, GitHub CLI, Google Antigravity, and/or Pi
+  provider subscription session
 - macOS (LaunchAgent) or Linux (systemd user unit) for `install` service management
 
 ```sh
@@ -275,17 +277,25 @@ id = "copilot-default"
 [[accounts]]
 provider = "antigravity"
 id = "antigravity-default"
+
+[[accounts]]
+provider = "xai"
+id = "xai-default"
 ```
 
 ## Authentication
 
-`token-burn` does not run OAuth flows or store provider credentials.
+`token-burn` does not run login flows or maintain a separate credential store.
 
-Codex credentials are read from:
+Codex credentials are read from native Codex auth first:
 
 - configured `auth_file`
 - `$CODEX_HOME/auth.json`
 - `~/.codex/auth.json`
+
+If none is usable, `token-burn` falls back to Pi's `openai-codex` OAuth entry in
+`${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json`. Rotated Pi credentials are
+persisted under Pi-compatible locking.
 
 Claude credentials are read from:
 
@@ -294,9 +304,10 @@ Claude credentials are read from:
 - `~/.claude/.credentials.json`
 - macOS Keychain entry used by Claude Code
 
-GitHub Copilot credentials are not read directly. The Copilot provider shells
-out to the logged-in GitHub CLI and uses `gh api`, so `gh auth login` is the
-only setup path.
+GitHub Copilot prefers the logged-in GitHub CLI and uses `gh api`. If that
+request fails, it falls back to Pi's `github-copilot` OAuth entry. The GitHub
+OAuth token is used only for provider-owned quota and billing endpoints; the
+short-lived Copilot inference proxy token is not used for quota polling.
 
 Google Antigravity credentials are read from existing Antigravity state stores
 and, on macOS, the `agy` Keychain item. `token-burn` does not run a Google OAuth
@@ -305,8 +316,17 @@ token is expired and OAuth client credentials are supplied via environment, it
 uses the existing vendor refresh token to mint a short-lived access token and
 caches only that access token under token-burn's own XDG cache.
 
+xAI/Grok requires Pi subscription OAuth from `/login xai` (choose **Use a
+subscription**). Credentials are read from configured `auth_file`, then
+`${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json`. `XAI_API_KEY` is not accepted:
+xAI API billing is separate from Grok subscription quota. When needed,
+`token-burn` refreshes Pi's OAuth entry and updates `auth.json` under Pi's shared
+lock while preserving all other entries.
+
 Secrets are treated as secrets. Authorization headers and obvious token/cookie
-fields are redacted from diagnostics.
+fields are redacted from diagnostics. Pi's per-request/session token counters
+are not subscription quota and are never read; only provider-owned live usage
+endpoints feed `token-burn`.
 
 ## OpenTelemetry
 
@@ -351,6 +371,8 @@ internal/provider/codex/ live Codex usage client
 internal/provider/claude live Claude usage client
 internal/provider/copilot live GitHub Copilot usage client
 internal/provider/antigravity live Google Antigravity usage client
+internal/provider/xai/  experimental live Grok subscription usage client
+internal/piauth/         shared read/refresh-safe Pi auth.json access
 internal/store/          SQLite schema and queries
 internal/forecast/       burn-rate and reset projection logic
 internal/otel/           OTLP metric exporter

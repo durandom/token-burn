@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -245,6 +248,16 @@ func TestFetchMissingAuthIsTyped(t *testing.T) {
 	}
 }
 
+func TestNativeCredentialFileSizeIsBounded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxResponseBytes+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readNativeAuthPath(path); err == nil || !strings.Contains(err.Error(), "exceeds 1 MiB") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestAuthLookupUsesConfiguredPathBeforeDefaults(t *testing.T) {
 	dir := t.TempDir()
 	configured := filepath.Join(dir, "configured.json")
@@ -277,6 +290,216 @@ func TestAuthLookupUsesConfiguredPathBeforeDefaults(t *testing.T) {
 	}
 	if auth.Tokens.AccessToken != "configured" {
 		t.Fatalf("access token = %q, want configured", auth.Tokens.AccessToken)
+	}
+}
+
+func TestFetchFallsBackToConfiguredPiAuth(t *testing.T) {
+	now := time.Date(2026, 7, 30, 14, 0, 0, 0, time.UTC)
+	authPath := writeAuth(t, fmt.Sprintf(`{"openai-codex":{"type":"oauth","access":"pi-access","refresh":"pi-refresh","expires":%d,"accountId":"pi-account"}}`, now.Add(time.Hour).UnixMilli()))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer pi-access" || r.Header.Get("ChatGPT-Account-Id") != "pi-account" {
+			t.Errorf("headers = %#v", r.Header)
+		}
+		fmt.Fprint(w, `{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":20}}}`)
+	}))
+	defer server.Close()
+	p := &Provider{HTTPClient: server.Client(), BaseURL: server.URL, Now: func() time.Time { return now }}
+	snap, err := p.Fetch(context.Background(), usageprovider.Account{AuthFile: authPath})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if snap.PlanType != "plus" || len(snap.Windows) != 1 || snap.Windows[0].UsedPercent != 20 {
+		t.Fatalf("snapshot = %#v", snap)
+	}
+}
+
+func TestNativeCodexAuthPreferredOverPiDefault(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".pi", "agent"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte(`{"tokens":{"access_token":"native"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".pi", "agent", "auth.json"), []byte(`{"openai-codex":{"type":"oauth","access":"pi","refresh":"secret","expires":9999999999999}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer native" {
+			t.Errorf("auth = %q", r.Header.Get("Authorization"))
+		}
+		fmt.Fprint(w, `{"rate_limit":{"primary_window":{"used_percent":1}}}`)
+	}))
+	defer server.Close()
+	p := &Provider{HTTPClient: server.Client(), BaseURL: server.URL, HomeDir: func() (string, error) { return home, nil }, Env: func(string) string { return "" }}
+	if _, err := p.Fetch(context.Background(), usageprovider.Account{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPiCodexRefreshPersistsRotationAndPreservesFields(t *testing.T) {
+	now := time.Date(2026, 7, 30, 14, 0, 0, 0, time.UTC)
+	authPath := writeAuth(t, fmt.Sprintf(`{"other":{"keep":true},"openai-codex":{"type":"oauth","access":"old-access","refresh":"old-refresh","expires":%d,"accountId":"account","unknown":"keep"}}`, now.Add(-time.Minute).UnixMilli()))
+	var refreshCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth":
+			refreshCalls++
+			if err := r.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			if r.Form.Get("client_id") != openAIOAuthClientID || r.Form.Get("refresh_token") != "old-refresh" {
+				t.Errorf("form = %#v", r.Form)
+			}
+			fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`)
+		default:
+			if r.Header.Get("Authorization") != "Bearer new-access" {
+				t.Errorf("auth = %q", r.Header.Get("Authorization"))
+			}
+			fmt.Fprint(w, `{"rate_limit":{"primary_window":{"used_percent":10}}}`)
+		}
+	}))
+	defer server.Close()
+	p := &Provider{HTTPClient: server.Client(), BaseURL: server.URL, OAuthURL: server.URL + "/oauth", Now: func() time.Time { return now }}
+	if _, err := p.Fetch(context.Background(), usageprovider.Account{AuthFile: authPath}); err != nil {
+		t.Fatal(err)
+	}
+	if refreshCalls != 1 {
+		t.Fatalf("refresh calls = %d", refreshCalls)
+	}
+	data, _ := os.ReadFile(authPath)
+	var root map[string]map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	cred := root["openai-codex"]
+	if cred["access"] != "new-access" || cred["refresh"] != "new-refresh" || cred["accountId"] != "account" || cred["unknown"] != "keep" || root["other"]["keep"] != true {
+		t.Fatalf("persisted = %#v", root)
+	}
+	if strings.Contains(string(data), "must-not-appear") {
+		t.Fatal("secret leak")
+	}
+}
+
+func TestPiCodexConcurrentRefreshRotatesOnce(t *testing.T) {
+	now := time.Date(2026, 7, 30, 14, 0, 0, 0, time.UTC)
+	authPath := writeAuth(t, fmt.Sprintf(`{"openai-codex":{"type":"oauth","access":"old","refresh":"refresh","expires":%d,"accountId":"account"}}`, now.Add(-time.Minute).UnixMilli()))
+	var refreshCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth" {
+			refreshCalls.Add(1)
+			time.Sleep(50 * time.Millisecond)
+			fmt.Fprint(w, `{"access_token":"new","refresh_token":"rotated","expires_in":3600}`)
+			return
+		}
+		fmt.Fprint(w, `{"rate_limit":{"primary_window":{"used_percent":10}}}`)
+	}))
+	defer server.Close()
+	p := &Provider{HTTPClient: server.Client(), BaseURL: server.URL, OAuthURL: server.URL + "/oauth", Now: func() time.Time { return now }}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := p.Fetch(context.Background(), usageprovider.Account{AuthFile: authPath})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Fetch() error = %v", err)
+		}
+	}
+	if refreshCalls.Load() != 1 {
+		t.Fatalf("refresh calls = %d", refreshCalls.Load())
+	}
+}
+
+func TestPiCodexReactiveRefreshOnce(t *testing.T) {
+	now := time.Date(2026, 7, 30, 14, 0, 0, 0, time.UTC)
+	authPath := writeAuth(t, fmt.Sprintf(`{"openai-codex":{"type":"oauth","access":"rejected","refresh":"refresh","expires":%d,"accountId":"account"}}`, now.Add(time.Hour).UnixMilli()))
+	var refreshCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth" {
+			refreshCalls++
+			fmt.Fprint(w, `{"access_token":"accepted","refresh_token":"rotated","expires_in":3600}`)
+			return
+		}
+		if r.Header.Get("Authorization") == "Bearer rejected" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		fmt.Fprint(w, `{"rate_limit":{"primary_window":{"used_percent":10}}}`)
+	}))
+	defer server.Close()
+	p := &Provider{HTTPClient: server.Client(), BaseURL: server.URL, OAuthURL: server.URL + "/oauth", Now: func() time.Time { return now }}
+	if _, err := p.Fetch(context.Background(), usageprovider.Account{AuthFile: authPath}); err != nil {
+		t.Fatal(err)
+	}
+	if refreshCalls != 1 {
+		t.Fatalf("refresh calls = %d", refreshCalls)
+	}
+}
+
+func TestConfiguredPiCodexRejectsWrongCredentialType(t *testing.T) {
+	authPath := writeAuth(t, `{"openai-codex":{"type":"api_key","key":"must-not-leak"}}`)
+	p := &Provider{HomeDir: func() (string, error) { return t.TempDir(), nil }, Env: func(string) string { return "" }}
+	_, err := p.Fetch(context.Background(), usageprovider.Account{AuthFile: authPath})
+	var perr *usageprovider.Error
+	if !errors.As(err, &perr) || perr.Code != usageprovider.ErrAuthMissing {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(fmt.Sprint(err), "must-not-leak") {
+		t.Fatalf("secret leaked: %v", err)
+	}
+}
+
+func TestCodexHTTPClassificationBoundsAndRedirect(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   usageprovider.ErrorCode
+	}{
+		{name: "rate", status: 429, want: usageprovider.ErrRateLimited},
+		{name: "server", status: 500, body: `{"error":"must-not-leak"}`, want: usageprovider.ErrTransientHTTPFailure},
+		{name: "malformed", status: 200, body: `{`, want: usageprovider.ErrInvalidResponse},
+		{name: "oversize", status: 200, body: strings.Repeat("x", maxResponseBytes+1), want: usageprovider.ErrInvalidResponse},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(tt.status); fmt.Fprint(w, tt.body) }))
+			defer server.Close()
+			_, err := (&Provider{HTTPClient: server.Client(), BaseURL: server.URL}).fetchUsage(context.Background(), resolvedCredential{Access: "secret"})
+			var perr *usageprovider.Error
+			if !errors.As(err, &perr) || perr.Code != tt.want {
+				t.Fatalf("error = %v", err)
+			}
+			if strings.Contains(fmt.Sprint(err), "must-not-leak") || strings.Contains(fmt.Sprint(err), "secret") {
+				t.Fatalf("secret leaked: %v", err)
+			}
+		})
+	}
+	followed := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/next" {
+			followed = true
+			fmt.Fprint(w, `{}`)
+			return
+		}
+		http.Redirect(w, r, "/next", http.StatusFound)
+	}))
+	defer server.Close()
+	_, err := (&Provider{HTTPClient: server.Client(), BaseURL: server.URL}).fetchUsage(context.Background(), resolvedCredential{Access: "secret"})
+	var perr *usageprovider.Error
+	if !errors.As(err, &perr) || perr.Code != usageprovider.ErrTransientHTTPFailure || followed {
+		t.Fatalf("redirect error = %v followed=%t", err, followed)
 	}
 }
 

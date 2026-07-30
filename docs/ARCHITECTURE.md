@@ -58,20 +58,26 @@ Providers must not inspect local sessions, transcripts, or token logs.
 Providers must not implement a separate authentication flow or store their own
 provider credentials. They reuse the standard local login artifacts already
 created by the vendor tool, such as Codex auth files, Claude Code OAuth
-credentials, the logged-in GitHub CLI session, or Antigravity OAuth state. If
-those credentials are missing or expired, the user should log in or refresh with
-the vendor tool.
+credentials, the logged-in GitHub CLI session, Antigravity OAuth state, or Pi's
+provider OAuth entries. Missing credentials require login with the vendor tool.
+Providers may refresh an expired access token when an existing vendor refresh
+token is available; rejected refresh credentials require login again.
 
 Providers may refresh short-lived access tokens with an existing vendor refresh
 token when that is the normal vendor credential shape, but they must not run a
-new login flow or overwrite vendor credential stores. Any local cache should
-contain only short-lived access tokens owned by `token-burn`. OAuth client
-credentials must come from the local environment or vendor-owned state, not from
-hardcoded repository constants.
+new login flow. Prefer a token-burn-owned access-token cache. A shared vendor
+credential may be updated only when rotation must be persisted, the provider's
+locking, symlink, ownership-compromise, and file-mode contract is implemented,
+and unrelated credential fields are preserved. Refresh work must have a bounded
+lock wait and be cancelled if lock ownership is lost. OAuth client credentials
+should come from local environment or
+vendor-owned state; a public client identifier may be pinned only when it is
+part of the vendor tool's existing OAuth contract.
 
 The provider-owned live endpoint is the source of truth. This is what lets
 `token-burn` observe quota usage caused by the same account on other machines,
-which local transcript parsing cannot do.
+which local transcript parsing cannot do. Pi request/session token counters are
+therefore deliberately excluded even when Pi supplies the OAuth credential.
 
 ### Store
 
@@ -130,7 +136,7 @@ The daemon records failures in SQLite and logs redacted details.
 
 ## Poll Cadence
 
-Default interval: 60 seconds.
+Default interval: five minutes.
 
 The endpoints are undocumented or semi-private. Polling faster than 60 seconds
 should require explicit configuration and a CLI warning.
@@ -171,6 +177,14 @@ id = "claude-default"
 [[accounts]]
 provider = "copilot"
 id = "copilot-default"
+
+[[accounts]]
+provider = "antigravity"
+id = "antigravity-default"
+
+[[accounts]]
+provider = "xai"
+id = "xai-default"
 ```
 
 ## Data Flow Details
@@ -187,5 +201,5 @@ id = "copilot-default"
 
 - Retention cleanup should run at daemon start and then daily.
 - Raw JSON should remain opt-in diagnostics.
-- Token refresh must remain narrowly scoped to existing vendor refresh tokens
-  and must not overwrite vendor credential stores.
+- Token refresh must remain narrowly scoped to existing vendor refresh tokens;
+  shared-store updates require vendor-compatible locking and field preservation.

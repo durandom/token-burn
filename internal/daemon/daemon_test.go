@@ -15,6 +15,13 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
+func TestOptionsProviderForXAI(t *testing.T) {
+	provider, ok := (Options{}).providerFor("xai")
+	if !ok || provider.ID() != "xai" {
+		t.Fatalf("providerFor(xai) = %#v, %t", provider, ok)
+	}
+}
+
 type fakeProvider struct {
 	id   string
 	snap usageprovider.Snapshot

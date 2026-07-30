@@ -63,11 +63,12 @@ token_burn_poll_latency_ms
 Allowed attributes:
 
 ```text
-provider      # codex, claude, copilot, antigravity
+provider      # codex, claude, copilot, antigravity, xai
 account_id    # configured alias/id, not email
-window        # five_hour, seven_day, ai_credits, gemini, claude_and_gpt, etc.
-plan_type     # plus, pro, max, team, unknown
-source        # wham_usage, anthropic_oauth_usage, github_copilot, google_cloud_code_fetch_available_models
+window        # five_hour, seven_day, ai_credits, gemini, weekly, quota, etc.
+plan_type     # plus, pro, max, team, supergrok, unknown
+source        # wham_usage, anthropic_oauth_usage, github_copilot,
+              # google_cloud_code_fetch_available_models, xai_grok_cli_billing
 ```
 
 Avoid high-cardinality attributes:

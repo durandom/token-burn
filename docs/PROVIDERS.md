@@ -41,9 +41,17 @@ User-Agent: token-burn
 
 ### Credential Sources
 
-- configured `auth_file`
+An explicit configured `auth_file` takes precedence and is auto-detected as
+native Codex or Pi format. Without one, native Codex credentials are preferred:
+
 - `$CODEX_HOME/auth.json`
 - `~/.codex/auth.json`
+
+If none is usable, the provider reads Pi's `openai-codex` OAuth entry from
+`${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json`.
+Near-expiry and HTTP 401/403 credentials are refreshed with Pi's OpenAI OAuth
+contract and persisted under the shared Pi lock while preserving unrelated and
+unknown fields.
 
 ### Response Shape
 
@@ -152,13 +160,22 @@ gh api /copilot_internal/user
 gh api /users/<login>/settings/billing/ai_credit/usage?year=<yyyy>&month=<m>
 ```
 
-The provider intentionally shells out to `gh api` instead of reading GitHub
-tokens directly. This keeps authentication delegated to GitHub CLI and avoids
-storing another token copy.
+The provider prefers `gh api`, keeping normal authentication delegated to
+GitHub CLI. If the user request fails, it reads Pi's `github-copilot` OAuth
+entry and calls the same GitHub REST endpoints directly.
 
 ### Credential Sources
 
-- logged-in GitHub CLI session from `gh auth login`
+- logged-in GitHub CLI session from `gh auth login` (preferred)
+- configured Pi `auth_file`
+- `${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json`
+
+Pi stores both a short-lived Copilot inference proxy token in `access` and the
+GitHub OAuth token in `refresh`. Quota polling intentionally uses `refresh` for
+GitHub REST; it does not use or refresh the inference proxy token. Pi credentials
+with `enterpriseUrl` are never sent to public `api.github.com`; GitHub Enterprise
+accounts require the preferred `gh` path so host routing remains delegated to
+GitHub CLI.
 
 ### Response Shape
 
@@ -227,6 +244,94 @@ Relevant fields from GitHub AI Credits usage:
   `0%` used when no finite entitlement is available.
 - Billing usage failures are recorded as provider raw metadata, but do not block
   live quota windows from `/copilot_internal/user`.
+- Pi per-request and session token counters are not read. They describe local
+  inference calls, not provider-reported account subscription quota.
+
+## xAI/Grok Subscription (Experimental)
+
+### Endpoints
+
+```text
+GET https://cli-chat-proxy.grok.com/v1/user
+GET https://cli-chat-proxy.grok.com/v1/billing?format=credits
+```
+
+These are undocumented Grok CLI proxy endpoints, not supported xAI public APIs.
+The provider requests identity first, uses the returned `userId` only as a
+transient header for billing, and never stores it.
+
+### Headers
+
+```text
+Authorization: Bearer <pi_xai_oauth_access_token>
+X-XAI-Token-Auth: xai-grok-cli
+x-grok-client-version: <reviewed_semver>
+x-grok-client-mode: headless
+x-userid: <transient_user_id> # billing request only
+```
+
+Redirects are rejected and response bodies are bounded. Contract changes may
+break this provider without notice.
+
+### Credential Source and Refresh
+
+- configured `auth_file`
+- `${PI_CODING_AGENT_DIR}/auth.json`
+- `~/.pi/agent/auth.json`
+
+Only Pi's `xai` credential with `type = "oauth"` is accepted. Run `/login xai`
+in Pi and choose **Use a subscription**. API-key credentials and `XAI_API_KEY`
+are intentionally rejected because xAI API billing is separate from Grok/X
+subscription usage.
+
+Access tokens are refreshed proactively at Pi's stored expiry and once after an
+HTTP 401/403. Refresh uses Pi's xAI OAuth client and existing refresh token:
+
+```text
+POST https://auth.x.ai/oauth2/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token
+client_id=b1a00492-073a-47ea-816f-4c329264a828
+refresh_token=<pi_refresh_token>
+```
+
+The refreshed credential replaces only the `xai` fields in Pi's `auth.json`.
+Existing auth symlinks are canonicalized before locking. Writes preserve
+unrelated providers and unknown fields, use mode `0600`, and share Pi's
+`auth.json.lock` proper-lockfile convention. Lock acquisition is bounded;
+heartbeats use the owned directory descriptor, and detected ownership loss
+cancels refresh before persistence. A refresh
+token omitted by xAI is preserved, matching Pi.
+
+### Response Shape
+
+Relevant current fields:
+
+```json
+{
+  "subscriptionTier": "supergrok",
+  "onDemandEnabled": true,
+  "config": {
+    "creditUsagePercent": 25,
+    "currentPeriod": {
+      "type": "USAGE_PERIOD_TYPE_WEEKLY",
+      "start": "2026-07-29T13:00:00Z",
+      "end": "2026-08-05T13:00:00Z"
+    },
+    "isUnifiedBillingUser": true,
+    "onDemandCap": { "val": 1000 },
+    "onDemandUsed": { "val": 250 },
+    "prepaidBalance": { "val": 500 }
+  }
+}
+```
+
+An explicitly weekly current period maps to `weekly`; an explicitly monthly
+period maps to `monthly`. Modern responses with an absent or unknown period type
+use neutral `quota`. Only verified legacy responses with `used`, `monthlyLimit`,
+and `billingPeriodEnd` default to `monthly`. Currency wrappers are integer cents
+and are kept only as whitelisted diagnostic metadata.
 
 ## Subscription Metadata
 
@@ -240,6 +345,8 @@ responses or vendor-owned local state:
   times, but no verified plan label.
 - Google Antigravity's Cloud Code endpoint currently exposes model quota labels,
   remaining fraction, and reset time, but no verified subscription label.
+- xAI/Grok exposes `subscriptionTier` when present in its experimental billing
+  response.
 
 ## Google Antigravity
 
