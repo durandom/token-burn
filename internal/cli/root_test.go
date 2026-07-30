@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	usageprovider "github.com/durandom/token-burn/internal/provider"
 )
 
 func TestVersionCommand(t *testing.T) {
@@ -87,5 +90,50 @@ func TestParseLookbackDuration(t *testing.T) {
 				t.Fatalf("duration = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPrintVerboseSnapshotReportsResetWait(t *testing.T) {
+	now := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(90 * time.Minute)
+	windowSeconds := 18000
+	remaining := 62.5
+
+	var out bytes.Buffer
+	printVerboseSnapshot(&out, usageprovider.Snapshot{
+		Provider:  "claude",
+		AccountID: "claude-default",
+		Windows: []usageprovider.Window{{
+			Name:             "five_hour",
+			UsedPercent:      37.5,
+			RemainingPercent: &remaining,
+			WindowSeconds:    &windowSeconds,
+			ResetAt:          &reset,
+			LimitReached:     false,
+		}},
+	}, now)
+
+	got := out.String()
+	for _, want := range []string{"window five_hour", "used=37.5%", "remaining=62.5%", "window=5h0m0s", "in=1h30m0s", "limit_reached=false"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("verbose snapshot output %q missing %q", got, want)
+		}
+	}
+}
+
+func TestPrintVerboseErrorFlagsRateLimit(t *testing.T) {
+	var out bytes.Buffer
+	printVerboseError(&out, commandError{
+		Provider:   "claude",
+		AccountID:  "claude-default",
+		Code:       string(usageprovider.ErrRateLimited),
+		HTTPStatus: 429,
+	})
+
+	got := out.String()
+	for _, want := range []string{"code=rate_limited", "http=429", "Retry-After"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("verbose error output %q missing %q", got, want)
+		}
 	}
 }
