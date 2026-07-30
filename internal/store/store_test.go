@@ -14,13 +14,15 @@ func TestOpenMigratesSchema(t *testing.T) {
 	store := openTestStore(t, ctx)
 	defer store.Close()
 
-	var count int
-	err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version = 1").Scan(&count)
-	if err != nil {
-		t.Fatalf("query schema_migrations: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("migration count = %d, want 1", count)
+	for _, version := range []int{1, 2} {
+		var count int
+		err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version = ?", version).Scan(&count)
+		if err != nil {
+			t.Fatalf("query schema_migrations version %d: %v", version, err)
+		}
+		if count != 1 {
+			t.Fatalf("migration %d count = %d, want 1", version, count)
+		}
 	}
 }
 
@@ -334,6 +336,9 @@ func TestDaemonStateRoundTripAndUpsert(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("LatestDaemonState() = ok %t err %v", ok, err)
 	}
+	if !got.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("UpdatedAt = %v, want %v", got.UpdatedAt, updatedAt)
+	}
 	if got.PollInterval != 7*time.Minute {
 		t.Fatalf("PollInterval = %s, want 7m", got.PollInterval)
 	}
@@ -354,6 +359,9 @@ func TestDaemonStateRoundTripAndUpsert(t *testing.T) {
 	}
 	if got.PollInterval != 14*time.Minute {
 		t.Fatalf("PollInterval after upsert = %s, want 14m", got.PollInterval)
+	}
+	if wantUpdatedAt := updatedAt.Add(time.Minute); !got.UpdatedAt.Equal(wantUpdatedAt) {
+		t.Fatalf("UpdatedAt after upsert = %v, want %v", got.UpdatedAt, wantUpdatedAt)
 	}
 	if got.NextPollAt != nil {
 		t.Fatalf("NextPollAt = %v, want nil after upsert without it", got.NextPollAt)

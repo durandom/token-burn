@@ -129,7 +129,7 @@ func (m Model) View() string {
 		b.WriteString(st.subtle.Render(" · no successful refresh yet"))
 	}
 	b.WriteString("\n")
-	b.WriteString(st.subtle.Render("q quit  r refresh  " + m.autoRefreshLabel()))
+	b.WriteString(st.subtle.Render("q quit  r refresh  " + m.daemonPollLabel(time.Now())))
 	b.WriteString("\n\n")
 
 	if len(m.errors) > 0 {
@@ -345,14 +345,38 @@ func pollFailureAction(run store.PollRun) string {
 	return ""
 }
 
-// autoRefreshLabel shows the daemon's live polling cadence when it has
-// published state (it varies with backoff); otherwise it falls back to the
-// config default and marks it as such.
-func (m Model) autoRefreshLabel() string {
-	if m.daemonState != nil && m.daemonState.PollInterval > 0 {
-		return "auto-refresh " + formatDuration(m.daemonState.PollInterval)
+// daemonPollLabel shows the daemon's polling cadence only while its published
+// state is a live lease. A stopped or crashed daemon cannot renew the lease, so
+// the label eventually falls back to the configured interval.
+func (m Model) daemonPollLabel(now time.Time) string {
+	if daemonStateIsLive(m.daemonState, now, m.cfg.HTTPTimeout) {
+		return "daemon poll " + formatDuration(m.daemonState.PollInterval)
 	}
-	return "auto-refresh " + formatDuration(m.cfg.PollInterval) + " (config)"
+	return "daemon poll " + formatDuration(m.cfg.PollInterval) + " (config)"
+}
+
+func daemonStateIsLive(state *store.DaemonState, now time.Time, httpTimeout time.Duration) bool {
+	if state == nil || state.UpdatedAt.IsZero() || state.PollInterval <= 0 {
+		return false
+	}
+
+	if httpTimeout <= 0 {
+		httpTimeout = config.DefaultHTTPTimeout
+	}
+
+	// Once the timer fires, allow one provider timeout for the next poll to
+	// finish and one TUI refresh interval for the result to become visible.
+	// UpdatedAt plus PollInterval is the hard upper bound; an explicit earlier
+	// NextPollAt can shorten, but never extend, a malformed lease.
+	grace := httpTimeout + refreshInterval
+	leaseExpiresAt := state.UpdatedAt.Add(state.PollInterval + grace)
+	if state.NextPollAt != nil && !state.NextPollAt.IsZero() {
+		scheduledExpiry := state.NextPollAt.Add(grace)
+		if scheduledExpiry.Before(leaseExpiresAt) {
+			leaseExpiresAt = scheduledExpiry
+		}
+	}
+	return now.Before(leaseExpiresAt)
 }
 
 func (m Model) refresh() tea.Cmd {

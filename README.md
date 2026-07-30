@@ -176,7 +176,7 @@ The TUI is intentionally compact.
 
 ```text
 token-burn  last poll 14:03:55
-q quit  r refresh  auto-refresh 5m
+q quit  r refresh  daemon poll 5m
 
 antigravity/antigravity-default
   claude and gpt   [────────────────────────]   0.0%

@@ -43,7 +43,7 @@ func TestViewRendersSamples(t *testing.T) {
 	model.lastGood = model.lastPoll
 
 	view := model.View()
-	for _, want := range []string{"token-burn", "auto-refresh 5m", "last success", "copilot/copilot-default  individual max", "five hour", "12.0%", "[", "█", "▒", "10.0%/h", "reset ~50%", "100% in"} {
+	for _, want := range []string{"token-burn", "daemon poll 5m", "last success", "copilot/copilot-default  individual max", "five hour", "12.0%", "[", "█", "▒", "10.0%/h", "reset ~50%", "100% in"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -61,18 +61,80 @@ func TestViewRendersGlobalErrors(t *testing.T) {
 	}
 }
 
-func TestAutoRefreshLabelPrefersDaemonInterval(t *testing.T) {
-	model := NewModel(testConfig(t)) // config default is 5m
+func TestDaemonPollLabelUsesOnlyLiveState(t *testing.T) {
+	now := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	model := NewModel(testConfig(t)) // config default is 5m, timeout is 15s
+	grace := model.cfg.HTTPTimeout + refreshInterval
+	liveNextPollAt := now.Add(-grace + time.Second)
+	staleNextPollAt := now.Add(-grace)
+	futureNextPollAt := now.Add(24 * time.Hour)
 
-	// No daemon state yet: falls back to config default, marked as such.
-	if got := model.autoRefreshLabel(); got != "auto-refresh 5m (config)" {
-		t.Fatalf("fallback label = %q, want config default", got)
+	tests := []struct {
+		name  string
+		state *store.DaemonState
+		want  string
+	}{
+		{
+			name: "no daemon state",
+			want: "daemon poll 5m (config)",
+		},
+		{
+			name:  "state without update timestamp",
+			state: &store.DaemonState{PollInterval: 14 * time.Minute},
+			want:  "daemon poll 5m (config)",
+		},
+		{
+			name: "live scheduled state",
+			state: &store.DaemonState{
+				UpdatedAt:    now.Add(-time.Minute),
+				PollInterval: 14 * time.Minute,
+				NextPollAt:   &liveNextPollAt,
+			},
+			want: "daemon poll 14m",
+		},
+		{
+			name: "expired scheduled state",
+			state: &store.DaemonState{
+				UpdatedAt:    now.Add(-time.Minute),
+				PollInterval: 14 * time.Minute,
+				NextPollAt:   &staleNextPollAt,
+			},
+			want: "daemon poll 5m (config)",
+		},
+		{
+			name: "live state derived from updated time",
+			state: &store.DaemonState{
+				UpdatedAt:    now.Add(-14*time.Minute - grace + time.Second),
+				PollInterval: 14 * time.Minute,
+			},
+			want: "daemon poll 14m",
+		},
+		{
+			name: "expired state derived from updated time",
+			state: &store.DaemonState{
+				UpdatedAt:    now.Add(-14*time.Minute - grace),
+				PollInterval: 14 * time.Minute,
+			},
+			want: "daemon poll 5m (config)",
+		},
+		{
+			name: "future schedule cannot extend expired update",
+			state: &store.DaemonState{
+				UpdatedAt:    now.Add(-14*time.Minute - grace),
+				PollInterval: 14 * time.Minute,
+				NextPollAt:   &futureNextPollAt,
+			},
+			want: "daemon poll 5m (config)",
+		},
 	}
 
-	// Daemon published a backed-off interval: label reflects the live value.
-	model.daemonState = &store.DaemonState{PollInterval: 14 * time.Minute}
-	if got := model.autoRefreshLabel(); got != "auto-refresh 14m" {
-		t.Fatalf("daemon label = %q, want live 14m", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model.daemonState = tt.state
+			if got := model.daemonPollLabel(now); got != tt.want {
+				t.Fatalf("daemonPollLabel() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
