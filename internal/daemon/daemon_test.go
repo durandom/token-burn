@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +93,90 @@ type fakeCommandRunner struct {
 func (f *fakeCommandRunner) Run(ctx context.Context, name string, args ...string) error {
 	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
 	return f.err
+}
+
+func TestRunPublishesDaemonState(t *testing.T) {
+	const pollInterval = time.Hour
+
+	databasePath := t.TempDir() + "/token-burn.db"
+	observer, err := store.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatalf("Open() observer error = %v", err)
+	}
+	defer observer.Close()
+
+	now := time.Date(2026, 7, 9, 10, 0, 0, 0, time.UTC)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- Run(runCtx, Options{
+			Config: config.Config{
+				DatabasePath: databasePath,
+				PollInterval: pollInterval,
+				HTTPTimeout:  config.DefaultHTTPTimeout,
+				Accounts:     []config.Account{{Provider: "codex", ID: "codex-default"}},
+			},
+			Providers: map[string]usageprovider.Provider{
+				"codex": fakeProvider{
+					id: "codex",
+					snap: usageprovider.Snapshot{
+						Provider:   "codex",
+						AccountID:  "codex-default",
+						Source:     "test",
+						ObservedAt: now,
+						Windows:    []usageprovider.Window{{Name: "five_hour", UsedPercent: 12}},
+					},
+				},
+			},
+			Now: func() time.Time { return now },
+		})
+	}()
+
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	var published store.DaemonState
+	for {
+		state, ok, err := observer.LatestDaemonState(context.Background())
+		if err != nil {
+			t.Fatalf("LatestDaemonState() error = %v", err)
+		}
+		if ok {
+			published = state
+			break
+		}
+		select {
+		case err := <-runErr:
+			t.Fatalf("Run() exited before publishing state: %v", err)
+		case <-deadline.C:
+			t.Fatal("timed out waiting for daemon state")
+		case <-ticker.C:
+		}
+	}
+
+	if !published.UpdatedAt.Equal(now) {
+		t.Fatalf("UpdatedAt = %v, want %v", published.UpdatedAt, now)
+	}
+	if published.PollInterval != pollInterval {
+		t.Fatalf("PollInterval = %s, want %s", published.PollInterval, pollInterval)
+	}
+	wantNextPollAt := now.Add(pollInterval)
+	if published.NextPollAt == nil || !published.NextPollAt.Equal(wantNextPollAt) {
+		t.Fatalf("NextPollAt = %v, want %v", published.NextPollAt, wantNextPollAt)
+	}
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error after cancellation = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not stop after cancellation")
+	}
 }
 
 func TestPollOnceStoresSnapshotAndEmitsMetrics(t *testing.T) {

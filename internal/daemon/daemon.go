@@ -123,6 +123,11 @@ func Run(ctx context.Context, opts Options) error {
 		failed := shouldBackoff(result)
 		delay := backoff.NextDelay(failed)
 		opts.logPollCycle(result, failed, delay)
+		now := opts.now()
+		nextPollAt := now.Add(delay)
+		if err := db.UpsertDaemonState(ctx, store.DaemonState{UpdatedAt: now, PollInterval: delay, NextPollAt: &nextPollAt}); err != nil {
+			return err
+		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
