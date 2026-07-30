@@ -31,9 +31,9 @@ type Options struct {
 }
 
 type Backoff struct {
-	Base     time.Duration
-	Max      time.Duration
-	failures int
+	Base    time.Duration
+	Max     time.Duration
+	current time.Duration // active backoff; 0 == steady state (no backoff)
 }
 
 type PollResult struct {
@@ -126,22 +126,32 @@ func (b *Backoff) NextDelay(failed bool) time.Duration {
 	if b.Max <= 0 {
 		b.Max = 15 * time.Minute
 	}
+	// current == 0 is the steady state (no active backoff). It is kept
+	// distinct from current == Base (a first failure, primed to double) so a
+	// recovery that lands exactly on Base resets fully instead of doubling on
+	// the next failure.
 	if !failed {
-		b.failures = 0
-		return b.Base
-	}
-	b.failures++
-	delay := b.Base
-	for i := 1; i < b.failures; i++ {
-		delay *= 2
-		if delay >= b.Max {
-			return b.Max
+		// Multiplicative decrease: probe back toward Base, then steady state.
+		if b.current <= 0 {
+			return b.Base
 		}
+		b.current /= 2
+		if b.current <= b.Base {
+			b.current = 0
+			return b.Base
+		}
+		return b.current
 	}
-	if delay > b.Max {
-		return b.Max
+	// Multiplicative increase: first failure holds at Base, then doubles.
+	if b.current <= 0 {
+		b.current = b.Base
+	} else {
+		b.current *= 2
 	}
-	return delay
+	if b.current > b.Max {
+		b.current = b.Max
+	}
+	return b.current
 }
 
 func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, error) {
