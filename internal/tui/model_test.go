@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/durandom/token-burn/internal/config"
 	"github.com/durandom/token-burn/internal/forecast"
 	"github.com/durandom/token-burn/internal/provider"
@@ -47,6 +48,205 @@ func TestViewRendersSamples(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestParseLayoutMode(t *testing.T) {
+	for _, value := range []string{"auto", "normal", "compact", "ultra", " COMPACT "} {
+		if _, err := ParseLayoutMode(value); err != nil {
+			t.Fatalf("ParseLayoutMode(%q) error = %v", value, err)
+		}
+	}
+	if _, err := ParseLayoutMode("wide"); err == nil {
+		t.Fatal("ParseLayoutMode(wide) error = nil")
+	}
+}
+
+func TestForcedLayoutModes(t *testing.T) {
+	reset := time.Now().Add(2 * time.Hour)
+	sample := store.Sample{Provider: "codex", AccountID: "default", WindowName: "five_hour", UsedPercent: 20, ResetAt: &reset}
+	tests := []struct {
+		name       string
+		mode       LayoutMode
+		height     int
+		wantInline bool
+		wantBar    bool
+	}{
+		{name: "normal stays two lines", mode: LayoutNormal, height: 7, wantBar: true},
+		{name: "compact stays one line", mode: LayoutCompact, height: 80, wantInline: true, wantBar: true},
+		{name: "ultra omits bar", mode: LayoutUltra, height: 80, wantInline: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithLayout(testConfig(t), tt.mode)
+			model.width = 110
+			model.height = tt.height
+			model.samples = []store.Sample{sample}
+			view := model.View()
+			for _, line := range strings.Split(view, "\n") {
+				if !strings.Contains(line, "five hour") {
+					continue
+				}
+				if got := strings.Contains(line, "resets"); got != tt.wantInline {
+					t.Fatalf("inline detail = %t, want %t:\n%s", got, tt.wantInline, view)
+				}
+				if got := strings.Contains(line, "["); got != tt.wantBar {
+					t.Fatalf("bar = %t, want %t:\n%s", got, tt.wantBar, view)
+				}
+				return
+			}
+			t.Fatalf("missing usage row:\n%s", view)
+		})
+	}
+}
+
+func TestResponsivePanelsUseTerminalWidth(t *testing.T) {
+	model := NewModel(testConfig(t))
+	model.width = 96
+	model.height = 80
+	model.samples = []store.Sample{
+		{Provider: "a", AccountID: "short", WindowName: "weekly", UsedPercent: 10},
+		{Provider: "provider-with-long-name", AccountID: "long-account", WindowName: "premium_interactions", UsedPercent: 75},
+	}
+
+	view := model.View()
+	var borders int
+	for _, line := range strings.Split(view, "\n") {
+		if !strings.Contains(line, "╭") && !strings.Contains(line, "╰") {
+			continue
+		}
+		borders++
+		if got := lipgloss.Width(line); got != model.width {
+			t.Fatalf("panel border width = %d, want %d:\n%s", got, model.width, view)
+		}
+	}
+	if borders != 4 {
+		t.Fatalf("panel border count = %d, want 4:\n%s", borders, view)
+	}
+}
+
+func TestViewSwitchesToCompactRowsWhenHeightIsConstrained(t *testing.T) {
+	reset := time.Now().Add(2 * time.Hour)
+	model := NewModel(testConfig(t))
+	model.width = 110
+	model.height = 7
+	model.samples = []store.Sample{{
+		Provider: "codex", AccountID: "default", WindowName: "five_hour",
+		UsedPercent: 20, ResetAt: &reset,
+	}}
+
+	view := model.View()
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "five hour") {
+			if !strings.Contains(line, "resets") {
+				t.Fatalf("compact row did not keep detail inline:\n%s", view)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing usage row:\n%s", view)
+}
+
+func TestNarrowTerminalUsesUltraCompactRows(t *testing.T) {
+	model := NewModel(testConfig(t))
+	model.width = 30
+	model.height = 40
+	model.samples = []store.Sample{{
+		Provider: "copilot", AccountID: "default", WindowName: "premium_interactions", UsedPercent: 75,
+	}}
+	view := model.View()
+	for _, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > model.width {
+			t.Fatalf("line width = %d, terminal width = %d:\n%s", got, model.width, view)
+		}
+		if strings.Contains(line, "premium") && strings.Contains(line, "[") {
+			t.Fatalf("ultra-compact row should omit bar:\n%s", view)
+		}
+	}
+}
+
+func TestNarrowEmptyStateRespectsTerminalWidth(t *testing.T) {
+	model := NewModel(testConfig(t))
+	model.width = 30
+	view := model.View()
+	for _, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > model.width {
+			t.Fatalf("line width = %d, terminal width = %d:\n%s", got, model.width, view)
+		}
+	}
+}
+
+func TestResponsiveLayoutExpandsBarsOnWideTerminals(t *testing.T) {
+	model := NewModel(testConfig(t))
+	model.width = 80
+	narrow := model.usageLayout(false)
+	model.width = 160
+	wide := model.usageLayout(false)
+	if narrow.barWidth >= wide.barWidth {
+		t.Fatalf("bar widths narrow=%d wide=%d, want wide larger", narrow.barWidth, wide.barWidth)
+	}
+	if wide.barWidth > 36 || narrow.barWidth < 12 {
+		t.Fatalf("bar widths outside bounds: narrow=%d wide=%d", narrow.barWidth, wide.barWidth)
+	}
+}
+
+func TestTooShortTerminalShowsResizeHint(t *testing.T) {
+	model := NewModel(testConfig(t))
+	model.width = 30
+	model.height = 5
+	model.samples = []store.Sample{
+		{Provider: "codex", AccountID: "default", WindowName: "primary", UsedPercent: 25},
+		{Provider: "xai", AccountID: "default", WindowName: "weekly", UsedPercent: 25},
+	}
+	if view := model.View(); !strings.Contains(view, "resize: need") {
+		t.Fatalf("missing resize hint:\n%s", view)
+	}
+}
+
+func TestTooShortEmptyStateShowsResizeHint(t *testing.T) {
+	model := NewModel(testConfig(t))
+	model.width = 30
+	model.height = 3
+	if view := model.View(); !strings.Contains(view, "resize: need") {
+		t.Fatalf("missing empty-state resize hint:\n%s", view)
+	}
+}
+
+func TestTypicalTerminalFitsWithoutScrolling(t *testing.T) {
+	model := NewModel(testConfig(t))
+	model.width = 100
+	model.height = 30
+	for providerName, windows := range map[string][]string{
+		"antigravity": {"claude_and_gpt", "gemini"},
+		"claude":      {"five_hour", "seven_day", "seven_day_fable"},
+		"codex":       {"additional_primary", "primary", "code_review_primary", "code_review_secondary"},
+		"copilot":     {"ai_credits", "chat", "completions", "premium_interactions"},
+		"xai":         {"weekly"},
+	} {
+		for _, window := range windows {
+			model.samples = append(model.samples, store.Sample{
+				Provider: providerName, AccountID: providerName + "-default",
+				WindowName: window, UsedPercent: 25,
+			})
+		}
+	}
+	view := model.View()
+	if got := lipgloss.Height(view); got > model.height {
+		t.Fatalf("view height = %d, terminal height = %d:\n%s", got, model.height, view)
+	}
+}
+
+func TestCompactUsageIsShorterThanStandardUsage(t *testing.T) {
+	model := NewModel(testConfig(t))
+	model.width = 100
+	model.samples = []store.Sample{
+		{Provider: "copilot", AccountID: "default", WindowName: "chat", UsedPercent: 0},
+		{Provider: "copilot", AccountID: "default", WindowName: "premium_interactions", UsedPercent: 75},
+	}
+	standard := model.renderUsage(model.usageLayout(false))
+	compact := model.renderUsage(model.usageLayout(true))
+	if lipgloss.Height(compact) >= lipgloss.Height(standard) {
+		t.Fatalf("compact height=%d standard height=%d", lipgloss.Height(compact), lipgloss.Height(standard))
 	}
 }
 

@@ -75,19 +75,26 @@ func NewRootCommand(build BuildInfo) *cobra.Command {
 }
 
 func newTUICommand(configPath *string) *cobra.Command {
-	return &cobra.Command{
+	var layoutName string
+	cmd := &cobra.Command{
 		Use:   "tui",
 		Short: "Open the live quota dashboard",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			layout, err := tokenburntui.ParseLayoutMode(layoutName)
+			if err != nil {
+				return err
+			}
 			cfg, err := config.Load(*configPath)
 			if err != nil {
 				return err
 			}
-			_, err = tea.NewProgram(tokenburntui.NewModel(cfg), tea.WithAltScreen()).Run()
+			_, err = tea.NewProgram(tokenburntui.NewModelWithLayout(cfg, layout), tea.WithAltScreen()).Run()
 			return err
 		},
 	}
+	cmd.Flags().StringVar(&layoutName, "layout", string(tokenburntui.LayoutAuto), "layout mode: auto, normal, compact, or ultra")
+	return cmd
 }
 
 func newUpgradeCommand(build BuildInfo) *cobra.Command {

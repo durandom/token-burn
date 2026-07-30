@@ -174,7 +174,18 @@ Open the dashboard:
 
 ## TUI
 
-The TUI is intentionally compact.
+The TUI is intentionally compact. Account panels use the available terminal
+width, bars scale with it, and quota details collapse onto one line when the
+normal layout would exceed the terminal height. The five-provider default fits
+a typical `100x30` terminal; smaller viewports use an ultra-compact row or show
+the minimum required height. Override automatic selection when needed:
+
+```sh
+token-burn tui --layout auto     # responsive default
+token-burn tui --layout normal   # two lines per quota window
+token-burn tui --layout compact  # one line with adaptive bars
+token-burn tui --layout ultra    # one line without bars
+```
 
 ```text
 token-burn  last poll 14:03:55
