@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/durandom/token-burn/internal/config"
 	"github.com/durandom/token-burn/internal/forecast"
 	"github.com/durandom/token-burn/internal/store"
@@ -16,12 +17,31 @@ import (
 
 const refreshInterval = 60 * time.Second
 
+type LayoutMode string
+
+const (
+	LayoutAuto    LayoutMode = "auto"
+	LayoutNormal  LayoutMode = "normal"
+	LayoutCompact LayoutMode = "compact"
+	LayoutUltra   LayoutMode = "ultra"
+)
+
+func ParseLayoutMode(value string) (LayoutMode, error) {
+	switch mode := LayoutMode(strings.ToLower(strings.TrimSpace(value))); mode {
+	case LayoutAuto, LayoutNormal, LayoutCompact, LayoutUltra:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid TUI layout %q; want auto, normal, compact, or ultra", value)
+	}
+}
+
 type Model struct {
 	cfg         config.Config
 	theme       Theme
 	styles      styles
 	width       int
 	height      int
+	layoutMode  LayoutMode
 	staleAfter  time.Duration
 	lastPoll    time.Time
 	lastGood    time.Time
@@ -60,14 +80,22 @@ type forecastRow struct {
 }
 
 func NewModel(cfg config.Config) Model {
+	return NewModelWithLayout(cfg, LayoutAuto)
+}
+
+func NewModelWithLayout(cfg config.Config, layout LayoutMode) Model {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = config.DefaultPollInterval
+	}
+	if layout == "" {
+		layout = LayoutAuto
 	}
 	theme := DefaultTheme()
 	return Model{
 		cfg:        cfg,
 		theme:      theme,
 		styles:     newStyles(theme),
+		layoutMode: layout,
 		staleAfter: staleSampleThreshold(cfg.PollInterval),
 		loading:    true,
 	}
@@ -133,23 +161,126 @@ func (m Model) View() string {
 	b.WriteString("\n\n")
 
 	if len(m.errors) > 0 {
-		b.WriteString(st.panelBad.Render(st.heading.Render("Errors") + "\n" + strings.Join(m.errors, "\n")))
+		b.WriteString(panelAtWidth(st.panelBad, m.width).Render(st.heading.Render("Errors") + "\n" + strings.Join(m.errors, "\n")))
 		b.WriteString("\n\n")
 	}
 
 	if len(m.samples) == 0 {
-		b.WriteString(st.panel.Render(st.subtle.Render("No samples yet.")))
-		return b.String()
+		prefix := b.String()
+		empty := panelAtWidth(st.panel, m.width).Render(st.subtle.Render("No samples yet."))
+		if m.height > 0 {
+			required := lipgloss.Height(prefix + empty)
+			if required > m.height {
+				prefix = resizeHintPrefix(prefix, st, required)
+			}
+		}
+		return m.constrainView(prefix + empty)
 	}
 
-	b.WriteString(m.renderUsage())
-	if m.width > 0 {
-		return lipgloss.NewStyle().MaxWidth(max(40, m.width)).Render(b.String())
+	prefix := b.String()
+	layout := m.usageLayout(false)
+	switch m.layoutMode {
+	case LayoutCompact:
+		layout = m.usageLayout(true)
+	case LayoutUltra:
+		layout = m.ultraUsageLayout()
+	case LayoutNormal:
+		// Keep the two-line layout even when it exceeds the viewport.
+	default:
+		if m.width > 0 && m.width < 64 {
+			layout = m.usageLayout(true)
+		}
 	}
-	return b.String()
+	usage := m.renderUsage(layout)
+	if m.layoutMode == LayoutAuto && !layout.compact && m.height > 0 && lipgloss.Height(prefix+usage) > m.height {
+		usage = m.renderUsage(m.usageLayout(true))
+	}
+	if m.height > 0 {
+		required := lipgloss.Height(prefix + usage)
+		if required > m.height {
+			prefix = resizeHintPrefix(prefix, st, required)
+			b.Reset()
+			b.WriteString(prefix)
+		}
+	}
+	b.WriteString(usage)
+	return m.constrainView(b.String())
 }
 
-func (m Model) renderUsage() string {
+func resizeHintPrefix(prefix string, st styles, required int) string {
+	lines := strings.Split(prefix, "\n")
+	if len(lines) < 2 {
+		return prefix
+	}
+	lines[1] = st.warn.Render(fmt.Sprintf("resize: need %d rows", required)) + st.subtle.Render(" · q quit")
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) constrainView(view string) string {
+	if m.width <= 0 {
+		return view
+	}
+	return lipgloss.NewStyle().MaxWidth(max(1, m.width)).Render(view)
+}
+
+type usageLayout struct {
+	panelWidth int
+	nameWidth  int
+	barWidth   int
+	compact    bool
+}
+
+func (m Model) usageLayout(compact bool) usageLayout {
+	layout := usageLayout{nameWidth: 28, barWidth: 24, compact: compact}
+	if m.width <= 0 {
+		return layout
+	}
+	layout.panelWidth = m.width
+	frameWidth := m.styles.panel.GetHorizontalFrameSize()
+	contentWidth := max(1, m.width-frameWidth)
+	if compact {
+		if contentWidth < 38 {
+			layout.nameWidth = clampInt(contentWidth-10, 4, 12)
+			layout.barWidth = 0
+			return layout
+		}
+		layout.nameWidth = clampInt(contentWidth/5, 12, 24)
+		layout.barWidth = clampInt(contentWidth-layout.nameWidth-38, 10, 24)
+		return layout
+	}
+	layout.nameWidth = clampInt(contentWidth/4, 16, 28)
+	layout.barWidth = clampInt(contentWidth/4, 12, 36)
+	return layout
+}
+
+func (m Model) ultraUsageLayout() usageLayout {
+	layout := m.usageLayout(true)
+	layout.barWidth = 0
+	if m.width > 0 {
+		contentWidth := max(1, m.width-m.styles.panel.GetHorizontalFrameSize())
+		layout.nameWidth = clampInt(contentWidth-10, 4, 20)
+	}
+	return layout
+}
+
+func clampInt(value, low, high int) int {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
+}
+
+func panelAtWidth(panel lipgloss.Style, width int) lipgloss.Style {
+	if width <= 0 {
+		return panel
+	}
+	return panel.Width(max(1, width-panel.GetHorizontalBorderSize()))
+}
+
+func (m Model) renderUsage(layout usageLayout) string {
 	grouped := map[string][]store.Sample{}
 	for _, sample := range m.samples {
 		key := sample.Provider + "/" + sample.AccountID
@@ -162,7 +293,7 @@ func (m Model) renderUsage() string {
 	keys := sortedKeys(grouped)
 
 	var blocks []string
-	for _, key := range keys {
+	for keyIndex, key := range keys {
 		rows := grouped[key]
 		sort.Slice(rows, func(i, j int) bool { return rows[i].WindowName < rows[j].WindowName })
 		var b strings.Builder
@@ -173,13 +304,17 @@ func (m Model) renderUsage() string {
 		for _, row := range rows {
 			forecastRow, ok := forecasts[forecastKey(row.Provider, row.AccountID, row.WindowName)]
 			if !ok {
-				b.WriteString(renderUsageLine(m.styles, row, nil, now, m.staleAfter))
+				b.WriteString(renderUsageLineWithLayout(m.styles, row, nil, now, m.staleAfter, layout))
 			} else {
-				b.WriteString(renderUsageLine(m.styles, row, &forecastRow, now, m.staleAfter))
+				b.WriteString(renderUsageLineWithLayout(m.styles, row, &forecastRow, now, m.staleAfter, layout))
 			}
 			b.WriteString("\n")
 		}
-		blocks = append(blocks, accountPanelStyle(m.styles, rows, forecasts).Render(strings.TrimRight(b.String(), "\n")))
+		panel := panelAtWidth(accountPanelStyle(m.styles, rows, forecasts), layout.panelWidth)
+		if layout.compact && keyIndex < len(keys)-1 {
+			panel = panel.BorderBottom(false)
+		}
+		blocks = append(blocks, panel.Render(strings.TrimRight(b.String(), "\n")))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, blocks...)
 }
@@ -585,6 +720,10 @@ func tickAfter(d time.Duration) tea.Cmd {
 }
 
 func renderUsageLine(st styles, sample store.Sample, forecastRow *forecastRow, now time.Time, staleAfter time.Duration) string {
+	return renderUsageLineWithLayout(st, sample, forecastRow, now, staleAfter, usageLayout{nameWidth: 28, barWidth: 24})
+}
+
+func renderUsageLineWithLayout(st styles, sample store.Sample, forecastRow *forecastRow, now time.Time, staleAfter time.Duration, layout usageLayout) string {
 	color := st.good
 	switch {
 	case sample.UsedPercent >= 90:
@@ -599,7 +738,7 @@ func renderUsageLine(st styles, sample store.Sample, forecastRow *forecastRow, n
 	stale := staleSampleLabel(sample, now, staleAfter)
 	expired := resetExpiredLabel(sample, now)
 	detail := renderDetail(st, reset, forecastRow, sample, now, stale != "" || expired != "")
-	if stale := staleSampleLabel(sample, now, staleAfter); stale != "" {
+	if stale != "" {
 		if detail == "" {
 			detail = st.warn.Render(stale)
 		} else {
@@ -613,14 +752,29 @@ func renderUsageLine(st styles, sample store.Sample, forecastRow *forecastRow, n
 			detail = detail + st.subtle.Render(" · ") + st.warn.Render(expired)
 		}
 	}
-	name := fmt.Sprintf("%-28s", truncateCell(displayWindowName(sample.WindowName), 28))
-	return fmt.Sprintf("  %s %s %s\n  %-28s %s",
-		st.heading.Render(name),
-		renderBar(st, sample.UsedPercent, projectedResetPercent(forecastRow), color),
-		color.Render(fmt.Sprintf("%5.1f%%", sample.UsedPercent)),
-		"",
-		detail,
-	)
+	nameWidth := max(1, layout.nameWidth)
+	name := fmt.Sprintf("%-*s", nameWidth, truncateCell(displayWindowName(sample.WindowName), nameWidth))
+	line := "  " + st.heading.Render(name)
+	if layout.barWidth > 0 {
+		line += " " + renderBarWidth(st, sample.UsedPercent, projectedResetPercent(forecastRow), color, layout.barWidth)
+	}
+	line += " " + color.Render(fmt.Sprintf("%5.1f%%", sample.UsedPercent))
+	if layout.compact {
+		if detail == "" {
+			return line
+		}
+		separator := st.subtle.Render(" · ")
+		if layout.panelWidth > 0 {
+			contentWidth := max(1, layout.panelWidth-st.panel.GetHorizontalFrameSize())
+			available := contentWidth - lipgloss.Width(line) - lipgloss.Width(separator)
+			if available <= 0 {
+				return line
+			}
+			detail = ansi.Truncate(detail, available, "…")
+		}
+		return line + separator + detail
+	}
+	return fmt.Sprintf("%s\n  %-*s %s", line, nameWidth, "", detail)
 }
 
 func staleSampleLabel(sample store.Sample, now time.Time, staleAfter time.Duration) string {
@@ -672,14 +826,18 @@ func accountKey(providerName, accountID string) string {
 }
 
 func renderBar(st styles, percent float64, projected *float64, color lipgloss.Style) string {
-	const width = 24
+	return renderBarWidth(st, percent, projected, color, 24)
+}
+
+func renderBarWidth(st styles, percent float64, projected *float64, color lipgloss.Style, width int) string {
+	width = max(1, width)
 	if percent < 0 {
 		percent = 0
 	}
 	if percent > 100 {
 		percent = 100
 	}
-	filled := int((percent/100)*width + 0.5)
+	filled := int((percent/100)*float64(width) + 0.5)
 	if filled > width {
 		filled = width
 	}
@@ -694,7 +852,7 @@ func renderBar(st styles, percent float64, projected *float64, color lipgloss.St
 		if value > 100 {
 			value = 100
 		}
-		projectedFilled = int((value/100)*width + 0.5)
+		projectedFilled = int((value/100)*float64(width) + 0.5)
 		if projectedFilled > width {
 			projectedFilled = width
 		}
