@@ -53,6 +53,10 @@ type PollResult struct {
 	Errors    []PollError
 }
 
+func (o Options) logPollCycle(result PollResult, failed bool, delay time.Duration) {
+	o.logf("poll cycle: snapshots=%d errors=%d poll_failed=%t next_poll_in=%s", len(result.Snapshots), len(result.Errors), failed, delay)
+}
+
 type PollError struct {
 	Provider   string
 	AccountID  string
@@ -118,7 +122,7 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		failed := shouldBackoff(result)
 		delay := backoff.NextDelay(failed)
-		opts.logf("poll cycle: snapshots=%d errors=%d backoff=%t next_poll_in=%s", len(result.Snapshots), len(result.Errors), failed, delay)
+		opts.logPollCycle(result, failed, delay)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -215,6 +219,7 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 							return result, err
 						}
 						result.Snapshots = append(result.Snapshots, snap)
+						opts.logSnapshot(snap, now)
 						if opts.Recorder != nil {
 							otel.EmitSnapshot(ctx, opts.Recorder, snap, now)
 							emitForecasts(ctx, opts.Recorder, db, snap, now)
@@ -224,7 +229,7 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 					pollErr = pollErrorFrom(acct.Provider, acct.ID, err)
 					opts.logf("%s/%s credential auto-refresh ran but fetch still failing: code=%s http=%d", acct.Provider, acct.ID, orNone(pollErr.Code), pollErr.HTTPStatus)
 				} else {
-					opts.logf("%s/%s credential auto-refresh failed: %v", acct.Provider, acct.ID, refreshErr)
+					opts.logf("%s/%s credential auto-refresh failed: %s", acct.Provider, acct.ID, redactErrorMessage(refreshErr))
 				}
 			}
 			result.Errors = append(result.Errors, pollErr)
