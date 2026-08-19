@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -154,9 +155,9 @@ func TestFetchMapsScopedWeeklyLimits(t *testing.T) {
 				]
 			}`,
 			want: map[string]float64{
-				"five_hour":        2,
-				"seven_day":        11,
-				"seven_day_fable":  7,
+				"five_hour":       2,
+				"seven_day":       11,
+				"seven_day_fable": 7,
 			},
 		},
 		{
@@ -389,17 +390,50 @@ func TestFetchUsesKeychainFallback(t *testing.T) {
 	}
 }
 
-func TestAccessTokenFromJSONDoesNotUseRefreshToken(t *testing.T) {
-	token, err := accessTokenFromJSON([]byte(`{"refresh_token":"refresh-only"}`))
+func TestCredentialFromJSONIgnoresRefreshToken(t *testing.T) {
+	cred, ok, err := credentialFromJSON([]byte(`{"claudeAiOauth":{"refreshToken":"refresh-only"}}`))
 	if err != nil {
-		t.Fatalf("accessTokenFromJSON() error = %v", err)
+		t.Fatalf("credentialFromJSON() error = %v", err)
 	}
-	if token != "" {
-		t.Fatalf("token = %q, want empty", token)
+	if ok || cred.Access != "" {
+		t.Fatalf("credential = %+v ok = %t, want no usable access token", cred, ok)
 	}
 }
 
-func TestAccessTokenFromSecret(t *testing.T) {
+// TestCredentialFromJSONIgnoresForeignOAuthTokens pins the fix for the bug that
+// made Claude polling fail roughly nine times out of ten: Claude Code stores MCP
+// server logins in the same container, and a recursive "find any accessToken"
+// search picked one of those at random because Go randomizes map iteration.
+func TestCredentialFromJSONIgnoresForeignOAuthTokens(t *testing.T) {
+	blob := []byte(`{
+		"mcpOAuth": {
+			"pulumi|abc": {"accessToken": "mcp-pulumi-token", "refreshToken": "mcp-refresh"},
+			"workos|def": {"accessToken": "mcp-workos-token"},
+			"cloudflare|ghi": {"accessToken": "mcp-cloudflare-token"}
+		},
+		"claudeAiOauth": {
+			"accessToken": "sk-ant-oat-real",
+			"refreshToken": "sk-ant-ort-real",
+			"expiresAt": 1787165038813
+		}
+	}`)
+
+	// Repeat: a single pass could pass by luck under randomized map iteration.
+	for i := 0; i < 200; i++ {
+		cred, ok, err := credentialFromJSON(blob)
+		if err != nil || !ok {
+			t.Fatalf("credentialFromJSON() ok = %t, error = %v", ok, err)
+		}
+		if cred.Access != "sk-ant-oat-real" {
+			t.Fatalf("iteration %d: access token = %q, want the claudeAiOauth token", i, cred.Access)
+		}
+		if cred.Refresh != "sk-ant-ort-real" {
+			t.Fatalf("iteration %d: refresh token = %q, want the claudeAiOauth token", i, cred.Refresh)
+		}
+	}
+}
+
+func TestCredentialFromSecret(t *testing.T) {
 	tests := []struct {
 		name   string
 		secret string
@@ -412,14 +446,55 @@ func TestAccessTokenFromSecret(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := accessTokenFromSecret(tt.secret)
+			cred, _, err := credentialFromSecret(tt.secret)
 			if err != nil {
-				t.Fatalf("accessTokenFromSecret() error = %v", err)
+				t.Fatalf("credentialFromSecret() error = %v", err)
 			}
-			if got != tt.want {
-				t.Fatalf("token = %q, want %q", got, tt.want)
+			if cred.Access != tt.want {
+				t.Fatalf("token = %q, want %q", cred.Access, tt.want)
 			}
 		})
+	}
+}
+
+// TestEncodePreservesForeignKeys guards the write-back path: rotating the Claude
+// token must not disturb the MCP server logins stored beside it, or the user is
+// silently signed out of every OAuth-authenticated MCP server.
+func TestEncodePreservesForeignKeys(t *testing.T) {
+	cred, ok, err := credentialFromJSON([]byte(`{
+		"mcpOAuth": {"pulumi|abc": {"accessToken": "mcp-pulumi-token"}},
+		"claudeAiOauth": {"accessToken": "old", "refreshToken": "old-refresh", "subscriptionType": "max", "someFutureField": 7}
+	}`))
+	if err != nil || !ok {
+		t.Fatalf("credentialFromJSON() ok = %t, error = %v", ok, err)
+	}
+
+	cred.Access = "new"
+	cred.Refresh = "new-refresh"
+	cred.ExpiresAt = 1234
+	encoded, err := cred.encode()
+	if err != nil {
+		t.Fatalf("encode() error = %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatalf("unmarshal encoded: %v", err)
+	}
+	mcp, _ := got["mcpOAuth"].(map[string]any)
+	pulumi, _ := mcp["pulumi|abc"].(map[string]any)
+	if pulumi["accessToken"] != "mcp-pulumi-token" {
+		t.Fatalf("mcpOAuth was not preserved: %s", encoded)
+	}
+	oauth, _ := got["claudeAiOauth"].(map[string]any)
+	if oauth["accessToken"] != "new" || oauth["refreshToken"] != "new-refresh" {
+		t.Fatalf("rotation not applied: %s", encoded)
+	}
+	if oauth["subscriptionType"] != "max" {
+		t.Fatalf("modelled sibling field lost: %s", encoded)
+	}
+	if oauth["someFutureField"] != float64(7) {
+		t.Fatalf("unmodelled sibling field lost: %s", encoded)
 	}
 }
 
