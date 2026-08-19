@@ -22,12 +22,15 @@ const (
 )
 
 type Provider struct {
-	HTTPClient    *http.Client
-	BaseURL       string
-	Now           func() time.Time
-	HomeDir       func() (string, error)
-	Env           func(string) string
-	KeychainToken func() (string, error)
+	HTTPClient      *http.Client
+	BaseURL         string
+	RefreshURL      string
+	Now             func() time.Time
+	HomeDir         func() (string, error)
+	Env             func(string) string
+	KeychainToken   func() (string, error)
+	KeychainAccount func() (string, error)
+	KeychainWrite   func(account, secret string) error
 }
 
 func New() *Provider {
@@ -40,14 +43,53 @@ func (p *Provider) ID() string {
 
 func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usageprovider.Snapshot, error) {
 	observedAt := p.now()
-	token, err := p.readAccessToken(acct)
+	cred, err := p.resolveCredential(acct)
 	if err != nil {
 		return usageprovider.Snapshot{}, err
 	}
 
+	// Refresh ahead of expiry when the stored login says it is due. Claude Code
+	// normally keeps its own token fresh, so this only matters while it sits
+	// idle - which is exactly when an unattended monitor would otherwise go
+	// dark.
+	attemptedRefresh := false
+	if cred.canRefresh() && cred.needsRefresh(observedAt, refreshSkew) {
+		attemptedRefresh = true
+		rotated, refreshErr := p.refreshCredential(ctx, cred, observedAt)
+		switch {
+		case refreshErr == nil:
+			cred = rotated
+		case cred.isExpired(observedAt):
+			// The token is already dead, so the failed refresh is the real
+			// cause. Falling through would produce a 401 and report
+			// auth_expired for what may well be a rate limit or an outage,
+			// which sends the user to re-login for no reason and denies the
+			// daemon the backoff signal it needs.
+			return usageprovider.Snapshot{}, refreshErr
+		}
+		// Otherwise the token is inside the refresh skew but still valid, so
+		// the current one is good for this poll.
+	}
+
+	payload, err := p.fetchUsage(ctx, cred.Access)
+	if err != nil && isAuthExpired(err) && cred.canRefresh() && !attemptedRefresh {
+		rotated, refreshErr := p.refreshCredential(ctx, cred, observedAt)
+		if refreshErr == nil {
+			cred = rotated
+			payload, err = p.fetchUsage(ctx, cred.Access)
+		}
+	}
+	if err != nil {
+		return usageprovider.Snapshot{}, err
+	}
+
+	return mapUsageResponse(payload, acct, observedAt), nil
+}
+
+func (p *Provider) fetchUsage(ctx context.Context, token string) (usageResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.baseURL(), "/")+"/usage", nil)
 	if err != nil {
-		return usageprovider.Snapshot{}, fmt.Errorf("claude create usage request: %w", err)
+		return usageResponse{}, fmt.Errorf("claude create usage request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
@@ -56,7 +98,7 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 
 	resp, err := p.httpClient().Do(req)
 	if err != nil {
-		return usageprovider.Snapshot{}, &usageprovider.Error{
+		return usageResponse{}, &usageprovider.Error{
 			Code:     usageprovider.ErrTransientHTTPFailure,
 			Provider: id,
 			Err:      err,
@@ -66,24 +108,24 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return usageprovider.Snapshot{}, fmt.Errorf("claude read usage response: %w", err)
+		return usageResponse{}, fmt.Errorf("claude read usage response: %w", err)
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return usageprovider.Snapshot{}, &usageprovider.Error{
+		return usageResponse{}, &usageprovider.Error{
 			Code:       usageprovider.ErrAuthExpired,
 			Provider:   id,
 			HTTPStatus: resp.StatusCode,
 		}
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return usageprovider.Snapshot{}, &usageprovider.Error{
+		return usageResponse{}, &usageprovider.Error{
 			Code:       usageprovider.ErrRateLimited,
 			Provider:   id,
 			HTTPStatus: resp.StatusCode,
 		}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return usageprovider.Snapshot{}, &usageprovider.Error{
+		return usageResponse{}, &usageprovider.Error{
 			Code:       usageprovider.ErrTransientHTTPFailure,
 			Provider:   id,
 			HTTPStatus: resp.StatusCode,
@@ -93,19 +135,26 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 
 	var payload usageResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return usageprovider.Snapshot{}, &usageprovider.Error{
+		return usageResponse{}, &usageprovider.Error{
 			Code:     usageprovider.ErrInvalidResponse,
 			Provider: id,
 			Err:      err,
 		}
 	}
-
-	return mapUsageResponse(payload, acct, observedAt), nil
+	return payload, nil
 }
 
-func (p *Provider) readAccessToken(acct usageprovider.Account) (string, error) {
+func isAuthExpired(err error) bool {
+	var perr *usageprovider.Error
+	return errors.As(err, &perr) && perr.Code == usageprovider.ErrAuthExpired
+}
+
+// resolveCredential returns the first usable Claude login, preferring an
+// explicit environment token, then the credentials file, then the macOS
+// Keychain.
+func (p *Provider) resolveCredential(acct usageprovider.Account) (credential, error) {
 	if token := strings.TrimSpace(p.env("CLAUDE_CODE_OAUTH_TOKEN")); token != "" {
-		return token, nil
+		return credential{Access: token, source: credentialSource{kind: sourceEnv}}, nil
 	}
 	for _, path := range p.credentialCandidates(acct) {
 		data, err := os.ReadFile(path)
@@ -113,28 +162,40 @@ func (p *Provider) readAccessToken(acct usageprovider.Account) (string, error) {
 			continue
 		}
 		if err != nil {
-			return "", fmt.Errorf("claude read credentials file %s: %w", path, err)
+			return credential{}, fmt.Errorf("claude read credentials file %s: %w", path, err)
 		}
-		token, err := accessTokenFromJSON(data)
+		cred, ok, err := credentialFromJSON(data)
 		if err != nil {
-			return "", &usageprovider.Error{
+			return credential{}, &usageprovider.Error{
 				Code:     usageprovider.ErrInvalidResponse,
 				Provider: id,
 				Err:      fmt.Errorf("parse claude credentials file %s: %w", path, err),
 			}
 		}
-		if token != "" {
-			return token, nil
+		if ok {
+			cred.source = credentialSource{kind: sourceFile, path: path}
+			return cred, nil
 		}
 	}
-	token, err := p.keychainAccessToken()
+
+	secret, err := p.keychainSecret()
 	if err != nil {
-		return "", err
+		return credential{}, err
 	}
-	if token != "" {
-		return token, nil
+	cred, ok, err := credentialFromSecret(secret)
+	if err != nil {
+		return credential{}, &usageprovider.Error{
+			Code:     usageprovider.ErrInvalidResponse,
+			Provider: id,
+			Err:      errors.New("parse claude credentials from macOS Keychain"),
+		}
 	}
-	return "", &usageprovider.Error{
+	if ok {
+		cred.source = credentialSource{kind: sourceKeychain}
+		return cred, nil
+	}
+
+	return credential{}, &usageprovider.Error{
 		Code:     usageprovider.ErrAuthMissing,
 		Provider: id,
 		Err:      errors.New("claude oauth credentials not found; run claude login"),
@@ -266,55 +327,6 @@ func (b *usageBucket) extraUsageEnabled() bool {
 	return b.MonthlyLimit != nil || b.UsedCredits != nil
 }
 
-func accessTokenFromJSON(data []byte) (string, error) {
-	var root any
-	if err := json.Unmarshal(data, &root); err != nil {
-		return "", err
-	}
-	return findAccessToken(root), nil
-}
-
-func accessTokenFromSecret(secret string) (string, error) {
-	secret = strings.TrimSpace(secret)
-	if secret == "" {
-		return "", nil
-	}
-	if strings.HasPrefix(secret, "{") || strings.HasPrefix(secret, "[") {
-		return accessTokenFromJSON([]byte(secret))
-	}
-	return secret, nil
-}
-
-func findAccessToken(value any) string {
-	switch v := value.(type) {
-	case map[string]any:
-		for key, inner := range v {
-			if isAccessTokenKey(key) {
-				if token, ok := inner.(string); ok {
-					return strings.TrimSpace(token)
-				}
-			}
-		}
-		for _, inner := range v {
-			if token := findAccessToken(inner); token != "" {
-				return token
-			}
-		}
-	case []any:
-		for _, inner := range v {
-			if token := findAccessToken(inner); token != "" {
-				return token
-			}
-		}
-	}
-	return ""
-}
-
-func isAccessTokenKey(key string) bool {
-	key = strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
-	return key == "accesstoken" || key == "oauthaccesstoken"
-}
-
 func (p *Provider) httpClient() *http.Client {
 	if p.HTTPClient != nil {
 		return p.HTTPClient
@@ -350,15 +362,32 @@ func (p *Provider) env(key string) string {
 	return os.Getenv(key)
 }
 
-func (p *Provider) keychainAccessToken() (string, error) {
+func (p *Provider) refreshURL() string {
+	if p.RefreshURL != "" {
+		return p.RefreshURL
+	}
+	return defaultRefreshURL
+}
+
+func (p *Provider) keychainSecret() (string, error) {
 	if p.KeychainToken != nil {
 		return p.KeychainToken()
 	}
-	secret, err := readKeychainSecret()
-	if err != nil {
-		return "", err
+	return readKeychainSecret()
+}
+
+func (p *Provider) keychainAccount() (string, error) {
+	if p.KeychainAccount != nil {
+		return p.KeychainAccount()
 	}
-	return accessTokenFromSecret(secret)
+	return keychainAccount()
+}
+
+func (p *Provider) keychainWrite(account, secret string) error {
+	if p.KeychainWrite != nil {
+		return p.KeychainWrite(account, secret)
+	}
+	return writeKeychainSecret(account, secret)
 }
 
 func firstNonEmpty(values ...string) string {

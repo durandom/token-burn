@@ -108,10 +108,77 @@ User-Agent: token-burn
 
 ### Credential Sources
 
-- configured credentials file
-- `CLAUDE_CODE_OAUTH_TOKEN`
-- `~/.claude/.credentials.json`
-- macOS Keychain entry `Claude Code-credentials`
+Probed in order:
+
+1. `CLAUDE_CODE_OAUTH_TOKEN`
+2. configured credentials file
+3. `~/.claude/.credentials.json`
+4. macOS Keychain entry `Claude Code-credentials`
+
+The stored credential is a JSON container whose Claude login lives under
+`claudeAiOauth`:
+
+```json
+{
+  "claudeAiOauth": {
+    "accessToken": "sk-ant-oat...",
+    "refreshToken": "sk-ant-ort...",
+    "expiresAt": 1787165038813,
+    "subscriptionType": "max"
+  },
+  "mcpOAuth": {
+    "<server>|<hash>": { "accessToken": "...", "refreshToken": "..." }
+  }
+}
+```
+
+The `accessToken` field is read by exact key from `claudeAiOauth` only. This is
+load-bearing: Claude Code stores every OAuth-authenticated MCP server login in
+the same container under `mcpOAuth`, each with its own `accessToken`. Searching
+the container recursively for "some key named accessToken" returns an unrelated
+MCP token, which the usage endpoint rejects with HTTP 401 — and because Go
+randomizes map iteration, it does so intermittently rather than consistently.
+
+### Token Refresh
+
+```text
+POST https://platform.claude.com/v1/oauth/token
+grant_type=refresh_token&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&refresh_token=<token>
+```
+
+The endpoint and client ID were confirmed against the live service: an unknown
+`client_id` answers `400 invalid_request_error` with "Client with id ... not
+found", while this one gets past client validation. Both are undocumented and
+may change.
+
+A `400` is only treated as a dead login when the body says `invalid_grant` or
+names the refresh token. Any other `400` - an unrecognised `client_id`, a
+malformed request - is token-burn's problem, not the user's, and is reported as
+a transient failure so nobody is sent to re-authenticate for a bug on this side.
+The endpoint also rate-limits: a `429` is surfaced as `rate_limited` so the
+daemon backs off.
+
+The access token lives roughly twelve hours. Claude Code renews it while it is
+running, so token-burn only needs to refresh when Claude Code has been idle
+longer than that. A refresh is attempted five minutes ahead of `expiresAt`, and
+once more if a poll is rejected with 401.
+
+Rotations are written back to the source they came from. This is mandatory, not
+an optimisation: Anthropic rotates the refresh token on every exchange and
+invalidates the previous one, so a refresh that is not persisted would leave
+Claude Code holding a dead refresh token. Two constraints follow:
+
+- The write must preserve every sibling key, `mcpOAuth` included. Re-serialising
+  only the fields token-burn models would sign the user out of every MCP server.
+- The source is re-read and compared immediately before the write, and the write
+  is abandoned if Claude Code changed it in the meantime. Neither backend offers
+  a compare-and-swap, so this narrows the race rather than closing it. Losing it
+  costs one redundant refresh, not a broken login.
+
+On macOS the secret is passed to `security add-generic-password -U` through the
+`-w` argument, not stdin: a stdin-prompted password is truncated at 128 bytes,
+which would replace the multi-kilobyte container with a fragment. Every write is
+read back and verified, and a failed write restores the previous content.
 
 ### Response Shape
 
