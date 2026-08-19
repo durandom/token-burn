@@ -59,9 +59,16 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 		switch {
 		case refreshErr == nil:
 			cred = rotated
-		case !cred.hasAccess():
+		case cred.isExpired(observedAt):
+			// The token is already dead, so the failed refresh is the real
+			// cause. Falling through would produce a 401 and report
+			// auth_expired for what may well be a rate limit or an outage,
+			// which sends the user to re-login for no reason and denies the
+			// daemon the backoff signal it needs.
 			return usageprovider.Snapshot{}, refreshErr
 		}
+		// Otherwise the token is inside the refresh skew but still valid, so
+		// the current one is good for this poll.
 	}
 
 	payload, err := p.fetchUsage(ctx, cred.Access)

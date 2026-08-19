@@ -146,6 +146,18 @@ POST https://platform.claude.com/v1/oauth/token
 grant_type=refresh_token&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&refresh_token=<token>
 ```
 
+The endpoint and client ID were confirmed against the live service: an unknown
+`client_id` answers `400 invalid_request_error` with "Client with id ... not
+found", while this one gets past client validation. Both are undocumented and
+may change.
+
+A `400` is only treated as a dead login when the body says `invalid_grant` or
+names the refresh token. Any other `400` - an unrecognised `client_id`, a
+malformed request - is token-burn's problem, not the user's, and is reported as
+a transient failure so nobody is sent to re-authenticate for a bug on this side.
+The endpoint also rate-limits: a `429` is surfaced as `rate_limited` so the
+daemon backs off.
+
 The access token lives roughly twelve hours. Claude Code renews it while it is
 running, so token-burn only needs to refresh when Claude Code has been idle
 longer than that. A refresh is attempted five minutes ahead of `expiresAt`, and

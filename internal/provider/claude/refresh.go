@@ -105,15 +105,15 @@ func (p *Provider) requestRefresh(ctx context.Context, refreshToken string) (ref
 		}
 	}
 	switch {
-	case resp.StatusCode == http.StatusBadRequest,
-		resp.StatusCode == http.StatusUnauthorized,
-		resp.StatusCode == http.StatusForbidden:
+	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
 		return refreshResponse{}, &usageprovider.Error{
 			Code:       usageprovider.ErrAuthExpired,
 			Provider:   id,
 			HTTPStatus: resp.StatusCode,
 			Err:        errors.New("claude OAuth refresh rejected; run claude login"),
 		}
+	case resp.StatusCode == http.StatusBadRequest:
+		return refreshResponse{}, classifyBadRequest(body, refreshToken)
 	case resp.StatusCode == http.StatusTooManyRequests:
 		return refreshResponse{}, &usageprovider.Error{
 			Code:       usageprovider.ErrRateLimited,
@@ -252,4 +252,75 @@ func writeFileAtomic(path string, data []byte) error {
 		return fmt.Errorf("claude close temp credentials: %w", err)
 	}
 	return os.Rename(tmpName, path)
+}
+
+// classifyBadRequest decides whether a 400 from the token endpoint means the
+// user's login is dead or that token-burn sent something the endpoint did not
+// like.
+//
+// Only the former warrants telling the user to run `claude login`. The endpoint
+// also answers 400 for a client_id it does not recognise - which is what a
+// rotated or retired OAuth client would look like, and is token-burn's problem,
+// not the user's. Reporting that as an expired login would send the user to
+// re-authenticate over and over while the real cause stayed invisible: the same
+// misdiagnosis that made the original credential bug so hard to spot.
+func classifyBadRequest(body []byte, refreshToken string) error {
+	kind, message := oauthErrorFields(body)
+
+	if kind == "invalid_grant" || strings.Contains(strings.ToLower(message), "refresh token") {
+		return &usageprovider.Error{
+			Code:       usageprovider.ErrAuthExpired,
+			Provider:   id,
+			HTTPStatus: http.StatusBadRequest,
+			Err:        errors.New("claude OAuth refresh token is no longer valid; run claude login"),
+		}
+	}
+
+	detail := strings.TrimSpace(kind + " " + message)
+	if detail == "" {
+		detail = "no error detail"
+	}
+	return &usageprovider.Error{
+		Code:       usageprovider.ErrTransientHTTPFailure,
+		Provider:   id,
+		HTTPStatus: http.StatusBadRequest,
+		Err:        fmt.Errorf("claude OAuth refresh rejected the request: %s", redactToken(truncate(detail, 256), refreshToken)),
+	}
+}
+
+// oauthErrorFields reads the error type and message out of either shape the
+// endpoint uses: the RFC 6749 form with string fields, or Anthropic's nested
+// error object.
+func oauthErrorFields(body []byte) (kind, message string) {
+	var payload struct {
+		Error json.RawMessage `json:"error"`
+		Type  string          `json:"type"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", ""
+	}
+	if len(payload.Error) == 0 {
+		return "", ""
+	}
+	var plain string
+	if err := json.Unmarshal(payload.Error, &plain); err == nil {
+		return plain, ""
+	}
+	var nested struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(payload.Error, &nested); err != nil {
+		return "", ""
+	}
+	return nested.Type, nested.Message
+}
+
+// redactToken keeps a credential out of an error string that may be logged or
+// exported.
+func redactToken(text, token string) string {
+	if strings.TrimSpace(token) == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, token, "<redacted>")
 }

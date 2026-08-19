@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -283,5 +285,129 @@ func TestKeychainRotationRestoresPreviousSecretOnFailedWrite(t *testing.T) {
 	}
 	if writes[1] != original {
 		t.Fatalf("restore wrote %q, want the original secret", writes[1])
+	}
+}
+
+// TestRefreshBadRequestClassification separates "the login is dead" from
+// "token-burn sent something the endpoint rejected". Only the former should tell
+// the user to re-login; reporting a client-side problem as an expired login
+// sends them to re-authenticate while the real cause stays hidden.
+func TestRefreshBadRequestClassification(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+		want usageprovider.ErrorCode
+	}{
+		{
+			name: "rfc6749 invalid_grant",
+			body: `{"error":"invalid_grant","error_description":"expired"}`,
+			want: usageprovider.ErrAuthExpired,
+		},
+		{
+			name: "nested invalid_grant",
+			body: `{"type":"error","error":{"type":"invalid_grant","message":"bad refresh"}}`,
+			want: usageprovider.ErrAuthExpired,
+		},
+		{
+			name: "message names the refresh token",
+			body: `{"type":"error","error":{"type":"invalid_request_error","message":"Refresh token not found"}}`,
+			want: usageprovider.ErrAuthExpired,
+		},
+		{
+			// Observed live from the real endpoint with an unknown client_id.
+			// This is token-burn's problem, not a dead user login.
+			name: "unknown client",
+			body: `{"type":"error","error":{"type":"invalid_request_error","message":"Client with id 0000 not found"}}`,
+			want: usageprovider.ErrTransientHTTPFailure,
+		},
+		{
+			name: "unparseable",
+			body: `<html>gateway</html>`,
+			want: usageprovider.ErrTransientHTTPFailure,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, tt.body, http.StatusBadRequest)
+			}))
+			defer server.Close()
+
+			_, err := (&Provider{RefreshURL: server.URL}).requestRefresh(context.Background(), "sk-ant-ort-secret")
+			var perr *usageprovider.Error
+			if !errors.As(err, &perr) {
+				t.Fatalf("error = %T, want *provider.Error", err)
+			}
+			if perr.Code != tt.want {
+				t.Fatalf("code = %s, want %s (%v)", perr.Code, tt.want, err)
+			}
+			if strings.Contains(err.Error(), "sk-ant-ort-secret") {
+				t.Fatalf("error leaks the refresh token: %v", err)
+			}
+		})
+	}
+}
+
+// TestExpiredTokenReportsRefreshFailureCause pins the rate-limit case: the
+// refresh endpoint answers 429, and the daemon must see rate_limited so it backs
+// off, rather than auth_expired telling the user to re-login.
+func TestExpiredTokenReportsRefreshFailureCause(t *testing.T) {
+	credPath := writeCredentials(t, `{"claudeAiOauth":{"accessToken":"stale","refreshToken":"refresh-1","expiresAt":1781431200000}}`)
+
+	refresh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"type":"rate_limit_error"}}`, http.StatusTooManyRequests)
+	}))
+	defer refresh.Close()
+
+	var seen []string
+	usage := usageServer(t, "never", &seen)
+	defer usage.Close()
+
+	_, err := (&Provider{
+		BaseURL:    usage.URL,
+		RefreshURL: refresh.URL,
+		Now:        func() time.Time { return time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC) },
+		HomeDir:    func() (string, error) { return t.TempDir(), nil },
+		Env:        func(string) string { return "" },
+	}).Fetch(context.Background(), usageprovider.Account{ID: "claude-default", CredentialsFile: credPath})
+
+	var perr *usageprovider.Error
+	if !errors.As(err, &perr) || perr.Code != usageprovider.ErrRateLimited {
+		t.Fatalf("error = %v, want rate_limited", err)
+	}
+	if len(seen) != 0 {
+		t.Fatalf("usage requests = %v, want none once the token is known dead", seen)
+	}
+}
+
+// TestValidTokenSurvivesFailedProactiveRefresh is the other side: inside the
+// refresh skew the token still works, so a failed refresh must not break the
+// poll.
+func TestValidTokenSurvivesFailedProactiveRefresh(t *testing.T) {
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	// Expires in two minutes: inside the five-minute skew, but still valid.
+	expiresAt := now.Add(2 * time.Minute).UnixMilli()
+	credPath := writeCredentials(t, `{"claudeAiOauth":{"accessToken":"current","refreshToken":"refresh-1","expiresAt":`+strconv.FormatInt(expiresAt, 10)+`}}`)
+
+	refresh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"type":"rate_limit_error"}}`, http.StatusTooManyRequests)
+	}))
+	defer refresh.Close()
+
+	var seen []string
+	usage := usageServer(t, "current", &seen)
+	defer usage.Close()
+
+	_, err := (&Provider{
+		BaseURL:    usage.URL,
+		RefreshURL: refresh.URL,
+		Now:        func() time.Time { return now },
+		HomeDir:    func() (string, error) { return t.TempDir(), nil },
+		Env:        func(string) string { return "" },
+	}).Fetch(context.Background(), usageprovider.Account{ID: "claude-default", CredentialsFile: credPath})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v, want the still-valid token to be used", err)
+	}
+	if len(seen) != 1 || seen[0] != "Bearer current" {
+		t.Fatalf("usage requests = %v, want one call with the current token", seen)
 	}
 }

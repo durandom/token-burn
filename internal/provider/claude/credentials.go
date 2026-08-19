@@ -77,6 +77,11 @@ func (c credential) canRefresh() bool {
 	return strings.TrimSpace(c.Refresh) != "" && c.source.kind != sourceEnv && c.source.kind != sourceNone
 }
 
+// isExpired reports whether the access token is past its stated expiry.
+func (c credential) isExpired(now time.Time) bool {
+	return c.ExpiresAt > 0 && c.ExpiresAt <= now.UnixMilli()
+}
+
 // needsRefresh reports whether the access token is expired or close enough to
 // expiry that a poll would race the boundary.
 func (c credential) needsRefresh(now time.Time, skew time.Duration) bool {
