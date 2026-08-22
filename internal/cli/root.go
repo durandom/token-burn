@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -68,10 +69,141 @@ func NewRootCommand(build BuildInfo) *cobra.Command {
 	root.AddCommand(newUninstallCommand())
 	root.AddCommand(newServiceStatusCommand())
 	root.AddCommand(newOTelTestCommand(&configPath))
+	root.AddCommand(newOTelBackfillCommand(&configPath, build))
 	root.AddCommand(newTUICommand(&configPath))
 	root.AddCommand(newUpgradeCommand(build))
 
 	return root
+}
+
+func newOTelBackfillCommand(configPath *string, build BuildInfo) *cobra.Command {
+	var providerName string
+	var accountID string
+	var windowName string
+	var fromRaw string
+	var toRaw string
+	var endpoint string
+	var afterID int64
+	var limit int
+	var batchSize int
+	var send bool
+
+	cmd := &cobra.Command{
+		Use:   "otel-backfill",
+		Short: "Backfill stored usage samples with their original timestamps",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if batchSize <= 0 {
+				return errors.New("--batch-size must be positive")
+			}
+			if limit < 0 || afterID < 0 {
+				return errors.New("--limit and --after-id must not be negative")
+			}
+			from, err := parseOptionalRFC3339("--from", fromRaw)
+			if err != nil {
+				return err
+			}
+			to, err := parseOptionalRFC3339("--to", toRaw)
+			if err != nil {
+				return err
+			}
+			if from != nil && to != nil && from.After(*to) {
+				return errors.New("--from must not be after --to")
+			}
+			cfg, err := config.Load(*configPath)
+			if err != nil {
+				return err
+			}
+			if cfg.OTel.Protocol != "http/protobuf" {
+				return fmt.Errorf("otel-backfill requires otel.protocol = %q", "http/protobuf")
+			}
+			if endpoint == "" {
+				endpoint = cfg.OTel.Endpoint
+			}
+			db, err := store.Open(cmd.Context(), cfg.DatabasePath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+
+			var exporter *otel.HistoricalExporter
+			if send {
+				exporter, err = otel.NewHistoricalExporter(endpoint, build.Version, &http.Client{Timeout: cfg.HTTPTimeout})
+				if err != nil {
+					return err
+				}
+			}
+			filter := store.HistoryFilter{
+				Provider: providerName, AccountID: accountID, WindowName: windowName,
+				Since: from, Until: to,
+			}
+			cursor := afterID
+			totalSamples := 0
+			totalPoints := 0
+			firstID := int64(0)
+			for {
+				queryLimit := batchSize
+				if limit > 0 && limit-totalSamples < queryLimit {
+					queryLimit = limit - totalSamples
+				}
+				if queryLimit == 0 {
+					break
+				}
+				samples, err := db.HistoryBatch(cmd.Context(), filter, cursor, queryLimit)
+				if err != nil {
+					return err
+				}
+				if len(samples) == 0 {
+					break
+				}
+				if firstID == 0 {
+					firstID = samples[0].ID
+				}
+				points := otel.HistoricalPointCount(samples)
+				if send {
+					points, err = exporter.Export(cmd.Context(), samples)
+					if err != nil {
+						return fmt.Errorf("export batch after id %d: %w", cursor, err)
+					}
+				}
+				cursor = samples[len(samples)-1].ID
+				totalSamples += len(samples)
+				totalPoints += points
+				if send {
+					fmt.Fprintf(cmd.OutOrStdout(), "exported samples=%d points=%d last_id=%d\n", totalSamples, totalPoints, cursor)
+				}
+			}
+			if !send {
+				fmt.Fprintf(cmd.OutOrStdout(), "dry run: samples=%d points=%d first_id=%d last_id=%d; add --send to export\n", totalSamples, totalPoints, firstID, cursor)
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "backfill complete: samples=%d points=%d first_id=%d last_id=%d\n", totalSamples, totalPoints, firstID, cursor)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&providerName, "provider", "", "provider filter")
+	cmd.Flags().StringVar(&accountID, "account", "", "account id filter")
+	cmd.Flags().StringVar(&windowName, "window", "", "window filter")
+	cmd.Flags().StringVar(&fromRaw, "from", "", "inclusive RFC3339 observed_at lower bound")
+	cmd.Flags().StringVar(&toRaw, "to", "", "inclusive RFC3339 observed_at upper bound")
+	cmd.Flags().StringVar(&endpoint, "endpoint", "", "OTLP HTTP endpoint override")
+	cmd.Flags().Int64Var(&afterID, "after-id", 0, "resume after this SQLite sample id")
+	cmd.Flags().IntVar(&limit, "limit", 0, "maximum samples (0 means all matching samples)")
+	cmd.Flags().IntVar(&batchSize, "batch-size", 1000, "samples per OTLP request")
+	cmd.Flags().BoolVar(&send, "send", false, "send data; without this flag only count matching samples")
+	return cmd
+}
+
+func parseOptionalRFC3339(flagName, raw string) (*time.Time, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", flagName, err)
+	}
+	parsed = parsed.UTC()
+	return &parsed, nil
 }
 
 func newTUICommand(configPath *string) *cobra.Command {

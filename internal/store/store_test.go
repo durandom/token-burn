@@ -368,6 +368,40 @@ func TestDaemonStateRoundTripAndUpsert(t *testing.T) {
 	}
 }
 
+func TestHistoryBatchFiltersPagesAndOmitsRawJSON(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, ctx)
+	defer store.Close()
+
+	t0 := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		insertSnapshotWithOptions(t, ctx, store, provider.Snapshot{
+			Provider: "codex", AccountID: "codex-default", Source: "live",
+			ObservedAt: t0.Add(time.Duration(i) * time.Minute),
+			Windows:    []provider.Window{{Name: "five_hour", UsedPercent: float64(i)}},
+			Raw:        map[string]any{"access_token": "must-not-be-read"},
+		}, InsertOptions{StoreRawJSON: true})
+	}
+	from := t0.Add(time.Minute)
+	batch, err := store.HistoryBatch(ctx, HistoryFilter{Provider: "codex", Since: &from}, 0, 1)
+	if err != nil {
+		t.Fatalf("HistoryBatch() error = %v", err)
+	}
+	if len(batch) != 1 || !batch[0].ObservedAt.Equal(from) {
+		t.Fatalf("first batch = %#v", batch)
+	}
+	if batch[0].RawJSON != nil {
+		t.Fatalf("RawJSON = %q, want nil", *batch[0].RawJSON)
+	}
+	second, err := store.HistoryBatch(ctx, HistoryFilter{Provider: "codex", Since: &from}, batch[0].ID, 10)
+	if err != nil {
+		t.Fatalf("second HistoryBatch() error = %v", err)
+	}
+	if len(second) != 1 || !second[0].ObservedAt.Equal(t0.Add(2*time.Minute)) {
+		t.Fatalf("second batch = %#v", second)
+	}
+}
+
 func openTestStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 

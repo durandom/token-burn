@@ -249,6 +249,20 @@ token-burn uninstall
 token-burn otel-test
 ```
 
+Backfill normalized SQLite usage history into an OTLP/HTTP endpoint while
+preserving each sample's original `observed_at` timestamp. The command is a
+dry-run unless `--send` is explicit:
+
+```sh
+token-burn otel-backfill --from 2026-06-19T00:00:00Z --to 2026-06-20T00:00:00Z
+token-burn otel-backfill --from 2026-06-19T00:00:00Z --to 2026-06-20T00:00:00Z --send
+```
+
+Use `--provider`, `--account`, and `--window` to narrow the export. Successful
+batches print their last SQLite sample ID; resume an interrupted export with
+`--after-id`. Re-sending an already accepted range can create duplicate OTLP
+points, so determine the missing time range before using `--send`.
+
 ## Configuration
 
 There is no `init` command. `token-burn` creates a small XDG-driven config file

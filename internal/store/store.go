@@ -28,6 +28,7 @@ type HistoryFilter struct {
 	AccountID  string
 	WindowName string
 	Since      *time.Time
+	Until      *time.Time
 	Limit      int
 }
 
@@ -525,6 +526,10 @@ func (s *Store) History(ctx context.Context, filter HistoryFilter) ([]Sample, er
 		where = append(where, "observed_at >= ?")
 		args = append(args, formatTime(*filter.Since))
 	}
+	if filter.Until != nil {
+		where = append(where, "observed_at <= ?")
+		args = append(args, formatTime(*filter.Until))
+	}
 
 	query := `
 SELECT
@@ -558,6 +563,65 @@ FROM live_usage_samples`
 	}
 	defer rows.Close()
 
+	return scanSamples(rows)
+}
+
+// HistoryBatch returns samples in stable insertion order for bounded exports.
+// Raw provider JSON is deliberately omitted: a telemetry backfill only needs
+// normalized samples and should not load stored provider payloads or secrets.
+func (s *Store) HistoryBatch(ctx context.Context, filter HistoryFilter, afterID int64, limit int) ([]Sample, error) {
+	if limit <= 0 {
+		return nil, errors.New("history batch limit must be positive")
+	}
+	args := []any{afterID}
+	where := []string{"id > ?"}
+	if filter.Provider != "" {
+		where = append(where, "provider = ?")
+		args = append(args, filter.Provider)
+	}
+	if filter.AccountID != "" {
+		where = append(where, "account_id = ?")
+		args = append(args, filter.AccountID)
+	}
+	if filter.WindowName != "" {
+		where = append(where, "window_name = ?")
+		args = append(args, provider.NormalizeWindowName(filter.WindowName))
+	}
+	if filter.Since != nil {
+		where = append(where, "observed_at >= ?")
+		args = append(args, formatTime(*filter.Since))
+	}
+	if filter.Until != nil {
+		where = append(where, "observed_at <= ?")
+		args = append(args, formatTime(*filter.Until))
+	}
+
+	query := `
+SELECT
+  id,
+  observed_at,
+  provider,
+  account_id,
+  plan_type,
+  window_name,
+  used_percent,
+  remaining_percent,
+  reset_at,
+  window_seconds,
+  limit_reached,
+  source,
+  NULL AS raw_json,
+  created_at
+FROM live_usage_samples
+WHERE ` + strings.Join(where, " AND ") + `
+ORDER BY id ASC
+LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query history batch: %w", err)
+	}
+	defer rows.Close()
 	return scanSamples(rows)
 }
 
