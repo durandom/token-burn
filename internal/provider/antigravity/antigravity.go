@@ -36,6 +36,7 @@ type Provider struct {
 	StateDBPaths   []string
 	KeychainSecret func() (string, error)
 	TokenCachePath string
+	CLITokenPath   string
 	OAuthURL       string
 	OAuthClientID  string
 	OAuthSecret    string

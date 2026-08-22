@@ -236,6 +236,42 @@ func TestTypicalTerminalFitsWithoutScrolling(t *testing.T) {
 	}
 }
 
+func TestAutoLayoutKeepsFullBordersWhenCompactRowsFit(t *testing.T) {
+	model := NewModel(testConfig(t))
+	model.width = 127
+	model.height = 32
+	for providerName, windows := range map[string][]string{
+		"antigravity": {"claude_and_gpt", "gemini"},
+		"claude":      {"five_hour", "seven_day", "seven_day_fable"},
+		"codex":       {"additional_primary", "primary"},
+		"copilot":     {"chat", "completions"},
+		"xai":         {"weekly"},
+	} {
+		for _, window := range windows {
+			model.samples = append(model.samples, store.Sample{
+				Provider: providerName, AccountID: providerName + "-default",
+				WindowName: window, UsedPercent: 25,
+			})
+		}
+	}
+	view := model.View()
+	if got := lipgloss.Height(view); got > model.height {
+		t.Fatalf("view height = %d, terminal height = %d:\n%s", got, model.height, view)
+	}
+	var fullBorders int
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "╭") || strings.Contains(line, "╰") {
+			fullBorders++
+		}
+		if strings.Contains(line, "├") {
+			t.Fatalf("expected full borders (room to spare), found a merged divider:\n%s", view)
+		}
+	}
+	if want := 2 * 5; fullBorders != want {
+		t.Fatalf("full border lines = %d, want %d (5 panels x top+bottom):\n%s", fullBorders, want, view)
+	}
+}
+
 func TestCompactUsageIsShorterThanStandardUsage(t *testing.T) {
 	model := NewModel(testConfig(t))
 	model.width = 100

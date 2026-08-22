@@ -70,6 +70,7 @@ func TestFetchMapsCloudCodeModels(t *testing.T) {
 		BaseURLs:       []string{server.URL},
 		StateDBPaths:   []string{stateDB},
 		KeychainSecret: func() (string, error) { return "", nil },
+		CLITokenPath:   filepath.Join(t.TempDir(), "missing-cli-token"),
 		Now:            func() time.Time { return now },
 	}).Fetch(context.Background(), usageprovider.Account{ID: "antigravity-default"})
 	if err != nil {
@@ -108,6 +109,7 @@ func TestFetchUsesKeychainWhenStateDBMissing(t *testing.T) {
 		BaseURLs:       []string{server.URL},
 		StateDBPaths:   []string{filepath.Join(t.TempDir(), "missing.vscdb")},
 		KeychainSecret: func() (string, error) { return `{"oauth":{"access_token":"keychain-token"}}`, nil },
+		CLITokenPath:   filepath.Join(t.TempDir(), "missing-cli-token"),
 	}).Fetch(context.Background(), usageprovider.Account{})
 	if err != nil {
 		t.Fatalf("Fetch() error = %v", err)
@@ -117,12 +119,49 @@ func TestFetchUsesKeychainWhenStateDBMissing(t *testing.T) {
 	}
 }
 
+func TestFetchUsesCLITokenFileWhenStateDBAndKeychainMissing(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"models":{}}`))
+	}))
+	defer server.Close()
+
+	cliTokenPath := filepath.Join(t.TempDir(), "antigravity-oauth-token")
+	if err := os.WriteFile(cliTokenPath, []byte(`{
+		"token": {
+			"access_token": "cli-token",
+			"token_type": "Bearer",
+			"refresh_token": "cli-refresh",
+			"expiry": "2026-06-26T10:00:00Z"
+		},
+		"auth_method": "consumer"
+	}`), 0o600); err != nil {
+		t.Fatalf("write cli token file: %v", err)
+	}
+
+	_, err := (&Provider{
+		BaseURLs:       []string{server.URL},
+		StateDBPaths:   []string{filepath.Join(t.TempDir(), "missing.vscdb")},
+		KeychainSecret: func() (string, error) { return "", nil },
+		CLITokenPath:   cliTokenPath,
+		Now:            func() time.Time { return time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC) },
+	}).Fetch(context.Background(), usageprovider.Account{})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if gotAuth != "Bearer cli-token" {
+		t.Fatalf("Authorization = %q, want cli token", gotAuth)
+	}
+}
+
 func TestFetchExpiredTokenIsTyped(t *testing.T) {
 	stateDB := writeStateDB(t, tokenEnvelopeWithRefresh("expired-token", "", time.Date(2026, 6, 19, 9, 0, 0, 0, time.UTC)))
 	_, err := (&Provider{
 		BaseURLs:       []string{"http://127.0.0.1"},
 		StateDBPaths:   []string{stateDB},
 		KeychainSecret: func() (string, error) { return "", nil },
+		CLITokenPath:   filepath.Join(t.TempDir(), "missing-cli-token"),
 		Now:            func() time.Time { return time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC) },
 	}).Fetch(context.Background(), usageprovider.Account{})
 
@@ -169,6 +208,7 @@ func TestFetchRefreshesExpiredStateToken(t *testing.T) {
 		StateDBPaths:   []string{stateDB},
 		TokenCachePath: cachePath,
 		KeychainSecret: func() (string, error) { return "", nil },
+		CLITokenPath:   filepath.Join(t.TempDir(), "missing-cli-token"),
 		Now:            func() time.Time { return now },
 	}).Fetch(context.Background(), usageprovider.Account{})
 	if err != nil {
@@ -199,6 +239,7 @@ func TestFetchHTTPAuthFailureIsTyped(t *testing.T) {
 		BaseURLs:       []string{server.URL},
 		StateDBPaths:   []string{stateDB},
 		KeychainSecret: func() (string, error) { return "", nil },
+		CLITokenPath:   filepath.Join(t.TempDir(), "missing-cli-token"),
 		Now:            func() time.Time { return time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC) },
 	}).Fetch(context.Background(), usageprovider.Account{})
 

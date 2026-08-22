@@ -41,6 +41,14 @@ func (p *Provider) tokenCandidates() ([]tokenCandidate, error) {
 			candidates = append(candidates, token)
 		}
 	}
+	if token, err := p.cliTokenCandidate(); err == nil {
+		if token.AccessToken != "" || token.RefreshToken != "" {
+			token.Source = "cli_token_file"
+			candidates = append(candidates, token)
+		}
+	} else {
+		return nil, err
+	}
 	if secret, err := p.keychainSecret(); err == nil && strings.TrimSpace(secret) != "" {
 		if token := tokenFromKeychainSecret(secret); token.AccessToken != "" || token.RefreshToken != "" {
 			token.Source = "keychain"
@@ -144,6 +152,43 @@ func decodeStateDBToken(encoded string) (tokenCandidate, error) {
 		}
 	}
 	return token, nil
+}
+
+func (p *Provider) cliTokenCandidate() (tokenCandidate, error) {
+	path := p.cliTokenPath()
+	if path == "" {
+		return tokenCandidate{}, nil
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return tokenCandidate{}, nil
+	}
+	if err != nil {
+		return tokenCandidate{}, fmt.Errorf("read antigravity cli token %s: %w", path, err)
+	}
+	var file cliTokenFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		return tokenCandidate{}, nil
+	}
+	token := tokenCandidate{
+		AccessToken:  strings.TrimSpace(file.Token.AccessToken),
+		RefreshToken: strings.TrimSpace(file.Token.RefreshToken),
+	}
+	if expiry, err := time.Parse(time.RFC3339, strings.TrimSpace(file.Token.Expiry)); err == nil {
+		token.ExpirySeconds = expiry.Unix()
+	}
+	return token, nil
+}
+
+func (p *Provider) cliTokenPath() string {
+	if p.CLITokenPath != "" {
+		return p.CLITokenPath
+	}
+	home, err := p.homeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token")
 }
 
 func (p *Provider) cachedAccessToken() (tokenCandidate, error) {

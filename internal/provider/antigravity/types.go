@@ -42,3 +42,11 @@ type refreshResponse struct {
 	ExpiresIn   int64  `json:"expires_in"`
 	TokenType   string `json:"token_type"`
 }
+
+type cliTokenFile struct {
+	Token struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		Expiry       string `json:"expiry"`
+	} `json:"token"`
+}

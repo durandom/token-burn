@@ -182,8 +182,10 @@ func (m Model) View() string {
 	switch m.layoutMode {
 	case LayoutCompact:
 		layout = m.usageLayout(true)
+		layout.mergeBorders = true
 	case LayoutUltra:
 		layout = m.ultraUsageLayout()
+		layout.mergeBorders = true
 	case LayoutNormal:
 		// Keep the two-line layout even when it exceeds the viewport.
 	default:
@@ -192,8 +194,18 @@ func (m Model) View() string {
 		}
 	}
 	usage := m.renderUsage(layout)
-	if m.layoutMode == LayoutAuto && !layout.compact && m.height > 0 && lipgloss.Height(prefix+usage) > m.height {
-		usage = m.renderUsage(m.usageLayout(true))
+	if m.layoutMode == LayoutAuto && m.height > 0 {
+		// Auto mode escalates density in two steps, using the cheaper option
+		// whenever it already fits: compact rows first, then merged panel
+		// borders only if compact rows alone still overflow the viewport.
+		if !layout.compact && lipgloss.Height(prefix+usage) > m.height {
+			layout = m.usageLayout(true)
+			usage = m.renderUsage(layout)
+		}
+		if layout.compact && !layout.mergeBorders && lipgloss.Height(prefix+usage) > m.height {
+			layout.mergeBorders = true
+			usage = m.renderUsage(layout)
+		}
 	}
 	if m.height > 0 {
 		required := lipgloss.Height(prefix + usage)
@@ -224,10 +236,11 @@ func (m Model) constrainView(view string) string {
 }
 
 type usageLayout struct {
-	panelWidth int
-	nameWidth  int
-	barWidth   int
-	compact    bool
+	panelWidth   int
+	nameWidth    int
+	barWidth     int
+	compact      bool
+	mergeBorders bool
 }
 
 func (m Model) usageLayout(compact bool) usageLayout {
@@ -280,6 +293,17 @@ func panelAtWidth(panel lipgloss.Style, width int) lipgloss.Style {
 	return panel.Width(max(1, width-panel.GetHorizontalBorderSize()))
 }
 
+// continuationBorder swaps the rounded border's top corners for its
+// tee corners, so a panel whose predecessor omitted its bottom border
+// (see renderUsage) reads as one shared divider line instead of a
+// dangling top edge.
+func continuationBorder() lipgloss.Border {
+	b := lipgloss.RoundedBorder()
+	b.TopLeft = b.MiddleLeft
+	b.TopRight = b.MiddleRight
+	return b
+}
+
 func (m Model) renderUsage(layout usageLayout) string {
 	grouped := map[string][]store.Sample{}
 	for _, sample := range m.samples {
@@ -311,8 +335,13 @@ func (m Model) renderUsage(layout usageLayout) string {
 			b.WriteString("\n")
 		}
 		panel := panelAtWidth(accountPanelStyle(m.styles, rows, forecasts), layout.panelWidth)
-		if layout.compact && keyIndex < len(keys)-1 {
-			panel = panel.BorderBottom(false)
+		if layout.mergeBorders {
+			if keyIndex > 0 {
+				panel = panel.BorderStyle(continuationBorder())
+			}
+			if keyIndex < len(keys)-1 {
+				panel = panel.BorderBottom(false)
+			}
 		}
 		blocks = append(blocks, panel.Render(strings.TrimRight(b.String(), "\n")))
 	}
