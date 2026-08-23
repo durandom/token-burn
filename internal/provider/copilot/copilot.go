@@ -270,12 +270,20 @@ func addQuotaRaw(snap *usageprovider.Snapshot, name string, quota quotaSnapshot)
 	if quota.TokenBasedBilling {
 		snap.Raw[prefix+"token_based_billing"] = quota.TokenBasedBilling
 	}
+	if quota.HasQuota != nil {
+		snap.Raw[prefix+"has_quota"] = *quota.HasQuota
+	}
+	if quota.OverageCount != nil {
+		snap.Raw[prefix+"overage_count"] = *quota.OverageCount
+	}
 }
 
 func windowFromQuota(name string, quota quotaSnapshot, resetAt *time.Time) (usageprovider.Window, bool) {
-	if quota.HasQuota != nil && !*quota.HasQuota {
-		return usageprovider.Window{}, false
-	}
+	// has_quota:false is GitHub's own "you are blocked, no quota available"
+	// signal. It must surface as an exhausted window, not disappear —
+	// dropping it here made the UI keep showing whatever capacity was last
+	// reported instead of the current "no credits" reality.
+	exhausted := quota.HasQuota != nil && !*quota.HasQuota
 
 	remainingPercent := quota.PercentRemaining
 	var usedPercent *float64
@@ -293,11 +301,22 @@ func windowFromQuota(name string, quota quotaSnapshot, resetAt *time.Time) (usag
 		zero := 0.0
 		usedPercent = &zero
 	}
+	if usedPercent == nil && exhausted {
+		full := 100.0
+		usedPercent = &full
+	}
+	if usedPercent == nil {
+		return usageprovider.Window{}, false
+	}
+	if exhausted && *usedPercent < 100 {
+		full := 100.0
+		usedPercent = &full
+	}
 
 	return usageprovider.NewWindow(name, usageprovider.WindowOptions{
 		UsedPercent:  usedPercent,
 		ResetAt:      resetAt,
-		LimitReached: quota.OverageCount != nil && *quota.OverageCount > 0,
+		LimitReached: exhausted || (quota.OverageCount != nil && *quota.OverageCount > 0),
 	})
 }
 
@@ -322,12 +341,22 @@ func addAICreditWindow(snap *usageprovider.Snapshot, user userResponse, usage bi
 	snap.Raw["ai_credit_net_amount_usd"] = netAmount
 	snap.Raw["ai_credit_models"] = strings.Join(sortedKeys(models), ",")
 
+	// The hardcoded allowance below is only an estimate. Cross-check it
+	// against GitHub's own authoritative exhaustion signal so a stale or
+	// wrong allowance can't report spare capacity GitHub has already cut off.
+	quota, hasQuota := tokenBillingQuota(user)
+	exhausted := hasQuota && quota.HasQuota != nil && !*quota.HasQuota
+	overage := hasQuota && quota.OverageCount != nil && *quota.OverageCount > 0
+
 	limit := aiCreditAllowance(user)
 	if limit <= 0 {
 		snap.Raw["ai_credit_used"] = usedCredits
 		return
 	}
 	usedPercent := (usedCredits / limit) * 100
+	if exhausted && usedPercent < 100 {
+		usedPercent = 100
+	}
 	remainingPercent := 100 - usedPercent
 	resetAt := parseReset(user.QuotaResetDateUTC, user.QuotaResetDate, observedAt)
 	if resetAt == nil {
@@ -337,10 +366,26 @@ func addAICreditWindow(snap *usageprovider.Snapshot, user userResponse, usage bi
 		UsedPercent:      &usedPercent,
 		RemainingPercent: &remainingPercent,
 		ResetAt:          resetAt,
+		LimitReached:     exhausted || overage,
 	})
 	if ok {
 		snap.Windows = append(snap.Windows, win)
 	}
+}
+
+// tokenBillingQuota returns the quota_snapshots entry GitHub marks as backing
+// token-based billing, falling back to the conventional "premium_interactions"
+// name when no entry is explicitly flagged.
+func tokenBillingQuota(user userResponse) (quotaSnapshot, bool) {
+	for _, quota := range user.QuotaSnapshots {
+		if quota.TokenBasedBilling {
+			return quota, true
+		}
+	}
+	if quota, ok := user.QuotaSnapshots["premium_interactions"]; ok {
+		return quota, true
+	}
+	return quotaSnapshot{}, false
 }
 
 func aiCreditAllowance(user userResponse) float64 {

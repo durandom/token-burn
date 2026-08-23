@@ -309,6 +309,10 @@ Relevant fields from GitHub AI Credits usage:
   usage after included credits or discounts.
 - Chat and completions may be reported as unlimited. Those windows are kept at
   `0%` used when no finite entitlement is available.
+- `has_quota: false` on a quota snapshot is GitHub's own "blocked, no quota
+  left" signal. It is surfaced as a 100%-used, `limit_reached` window rather
+  than dropped, and it caps the `ai_credits` window at 100% used even when the
+  hardcoded allowance table would otherwise compute lower usage.
 - Billing usage failures are recorded as provider raw metadata, but do not block
   live quota windows from `/copilot_internal/user`.
 - Pi per-request and session token counters are not read. They describe local

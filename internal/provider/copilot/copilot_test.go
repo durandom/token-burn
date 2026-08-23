@@ -123,6 +123,70 @@ func TestFetchKeepsQuotaWhenBillingUsageFails(t *testing.T) {
 	}
 }
 
+func TestFetchSurfacesExhaustedQuotaInsteadOfDroppingWindow(t *testing.T) {
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	runner := &fakeRunner{
+		responses: map[string][]byte{
+			"gh api -H Cache-Control: no-cache -H Pragma: no-cache /copilot_internal/user": []byte(`{
+				"login": "durandom",
+				"copilot_plan": "individual_pro",
+				"quota_reset_date": "2026-07-01",
+				"token_based_billing": true,
+				"quota_snapshots": {
+					"premium_interactions": {"has_quota": false, "unlimited": false}
+				}
+			}`),
+		},
+		errs: map[string]error{
+			"gh api -H Cache-Control: no-cache -H Pragma: no-cache /users/durandom/settings/billing/ai_credit/usage?year=2026&month=6": errors.New("forbidden"),
+		},
+	}
+
+	snap, err := (&Provider{Runner: runner, Now: func() time.Time { return now }}).Fetch(context.Background(), usageprovider.Account{})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	win := assertWindow(t, snap, "premium_interactions", 100, 0, "2026-07-01T00:00:00Z")
+	if !win.LimitReached {
+		t.Fatal("expected LimitReached = true for has_quota:false window")
+	}
+	if got := snap.Raw["quota_premium_interactions_has_quota"]; got != false {
+		t.Fatalf("quota_premium_interactions_has_quota = %#v, want false", got)
+	}
+}
+
+func TestFetchCapsAICreditsWhenGitHubReportsExhausted(t *testing.T) {
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	runner := &fakeRunner{responses: map[string][]byte{}, errs: map[string]error{}}
+	runner.responses["gh api -H Cache-Control: no-cache -H Pragma: no-cache /copilot_internal/user"] = []byte(`{
+		"login": "durandom",
+		"copilot_plan": "individual_pro",
+		"quota_reset_date_utc": "2026-07-01T00:00:00.000Z",
+		"token_based_billing": true,
+		"quota_snapshots": {
+			"premium_interactions": {"has_quota": false, "entitlement": 1500, "remaining": 0, "percent_remaining": 0}
+		}
+	}`)
+	// Only 10 of the hardcoded 1500-credit "pro" allowance were billed, which
+	// would compute as ~0.7% used if trusted on its own — but GitHub already
+	// reports the account as exhausted (has_quota:false), so the window must
+	// reflect that instead of the stale allowance-derived percentage.
+	runner.responses["gh api -H Cache-Control: no-cache -H Pragma: no-cache /users/durandom/settings/billing/ai_credit/usage?year=2026&month=6"] = []byte(`{
+		"usageItems": [
+			{"unitType": "ai-credits", "grossQuantity": 10, "grossAmount": 0.1}
+		]
+	}`)
+
+	snap, err := (&Provider{Runner: runner, Now: func() time.Time { return now }}).Fetch(context.Background(), usageprovider.Account{})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	win := assertWindow(t, snap, "ai_credits", 100, 0, "2026-07-01T00:00:00Z")
+	if !win.LimitReached {
+		t.Fatal("expected LimitReached = true when GitHub reports has_quota:false")
+	}
+}
+
 func TestFetchMapsGHFailureToAuthMissing(t *testing.T) {
 	runner := &fakeRunner{
 		responses: map[string][]byte{},
@@ -330,7 +394,7 @@ func writePiAuth(t *testing.T, value map[string]any) string {
 	return path
 }
 
-func assertWindow(t *testing.T, snap usageprovider.Snapshot, name string, used, remaining float64, reset string) {
+func assertWindow(t *testing.T, snap usageprovider.Snapshot, name string, used, remaining float64, reset string) usageprovider.Window {
 	t.Helper()
 	for _, win := range snap.Windows {
 		if win.Name != name {
@@ -345,7 +409,8 @@ func assertWindow(t *testing.T, snap usageprovider.Snapshot, name string, used, 
 		if win.ResetAt == nil || win.ResetAt.Format(time.RFC3339) != reset {
 			t.Fatalf("%s reset = %v, want %s", name, win.ResetAt, reset)
 		}
-		return
+		return win
 	}
 	t.Fatalf("missing window %q in %#v", name, snap.Windows)
+	return usageprovider.Window{}
 }
