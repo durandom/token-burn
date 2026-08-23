@@ -414,8 +414,8 @@ responses or vendor-owned local state:
   entitlements through `/copilot_internal/user`.
 - Claude Code's OAuth usage endpoint currently exposes usage buckets and reset
   times, but no verified plan label.
-- Google Antigravity's Cloud Code endpoint currently exposes model quota labels,
-  remaining fraction, and reset time, but no verified subscription label.
+- Google Antigravity exposes a verified subscription label (`paidTier.name`,
+  e.g. `Google AI Pro`) through `loadCodeAssist`.
 - xAI/Grok exposes `subscriptionTier` when present in its experimental billing
   response.
 
@@ -424,9 +424,20 @@ responses or vendor-owned local state:
 ### Endpoint
 
 ```text
+POST https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist
+POST https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist
+POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary
+POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary
 POST https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels
 POST https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels
 ```
+
+`token-burn` first calls `loadCodeAssist` to resolve the account's Cloud
+project ID (`cloudaicompanionProject`) and plan (`paidTier.name`), then calls
+`retrieveUserQuotaSummary` with that project ID for the real per-tier
+five-hour and weekly windows. `fetchAvailableModels` is kept only as a
+fallback for accounts/builds where the quota-summary endpoint isn't
+available — see Notes below for why it isn't trusted as the primary source.
 
 ### Headers
 
@@ -486,7 +497,55 @@ ${XDG_CACHE_HOME:-~/.cache}/token-burn/antigravity-auth.json
 
 ### Response Shape
 
-Relevant fields from `fetchAvailableModels`:
+Relevant fields from `loadCodeAssist`:
+
+```json
+{
+  "cloudaicompanionProject": "round-yew-rtd9f",
+  "currentTier": { "id": "free-tier" },
+  "paidTier": { "id": "g1-pro-tier", "name": "Google AI Pro" }
+}
+```
+
+Relevant fields from `retrieveUserQuotaSummary` (request body
+`{"project": "<cloudaicompanionProject>"}`):
+
+```json
+{
+  "groups": [
+    {
+      "displayName": "Gemini Models",
+      "description": "Models within this group: Gemini Flash, Gemini Pro",
+      "buckets": [
+        {
+          "bucketId": "gemini-weekly",
+          "window": "weekly",
+          "resetTime": "2026-08-29T13:49:38Z",
+          "description": "You have hit your 5-hour limit, so the weekly limit does not currently apply.",
+          "remainingFraction": 0.5140309
+        },
+        {
+          "bucketId": "gemini-5h",
+          "window": "5h",
+          "resetTime": "2026-08-23T12:06:27Z",
+          "description": "You have hit your 5-hour limit, it will refresh in 2 hours, 22 minutes.",
+          "remainingFraction": 0
+        }
+      ]
+    },
+    {
+      "displayName": "Claude and GPT models",
+      "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+      "buckets": [
+        { "bucketId": "3p-weekly", "window": "weekly", "resetTime": "2026-08-30T09:44:05Z", "remainingFraction": 1 },
+        { "bucketId": "3p-5h", "window": "5h", "resetTime": "2026-08-23T14:44:05Z", "remainingFraction": 1 }
+      ]
+    }
+  ]
+}
+```
+
+Relevant fields from the legacy `fetchAvailableModels` fallback:
 
 ```json
 {
@@ -498,14 +557,6 @@ Relevant fields from `fetchAvailableModels`:
         "remainingFraction": 0.8,
         "resetTime": "2026-06-26T10:00:00Z"
       }
-    },
-    "claude-sonnet": {
-      "displayName": "Claude Sonnet 4.5",
-      "model": "claude-sonnet",
-      "quotaInfo": {
-        "remainingFraction": 0.45,
-        "resetTime": "2026-06-19T15:00:00Z"
-      }
     }
   }
 }
@@ -515,11 +566,32 @@ Relevant fields from `fetchAvailableModels`:
 
 - Antigravity quota is fraction-based. `used_percent = 100 -
   remainingFraction * 100`.
-- `token-burn` normalizes returned model quotas into two pooled windows:
-  `gemini` and `claude_and_gpt`.
-- For each pool, the most constrained user-facing model drives the window.
+- `token-burn` maps each `retrieveUserQuotaSummary` group to a pool
+  (`gemini` or `claude_and_gpt` — matched by `displayName`) and each bucket to
+  a window: the `5h` bucket keeps the bare pool name (`gemini`,
+  `claude_and_gpt`) for continuity with prior history, and the `weekly`
+  bucket gets a `_weekly` suffix (`gemini_weekly`, `claude_and_gpt_weekly`).
+  Each bucket's human-readable `description` is stored as
+  `<window>_status` raw diagnostic metadata.
+- **Why not `fetchAvailableModels` alone**: it only reports a coarse
+  per-model fraction with no weekly data, and once a pool is actually
+  blocked it tends to stop reporting real fractions for that pool's models
+  (`remainingFraction: null`) rather than reporting them as exhausted —
+  confirmed against a real "Individual quota reached" block, where every
+  model in the blocked pool went to `null` except a few untouched/preview
+  models that reported a flat, misleadingly full `1.0` with a `resetTime`
+  that kept sliding to "now + 5h" on every poll instead of counting down to
+  a fixed point. `retrieveUserQuotaSummary` reported the same block
+  correctly: `gemini-5h` at `remainingFraction: 0` with a real, fixed
+  `resetTime` and the exact human-readable reason. Two independent
+  reference implementations ([OpenUsage](https://github.com/robinebers/openusage/blob/main/docs/providers/antigravity.md),
+  [CodexBar](https://github.com/steipete/CodexBar/blob/main/docs/antigravity.md))
+  document this exact "all-100%, sliding reset" pattern as a known,
+  named failure mode of the legacy endpoint.
 - Internal, hidden, and known legacy Gemini 2.5/placeholder model rows are
-  ignored.
-- The local Antigravity/`agy` language-server quota summary can expose richer
-  session-vs-weekly buckets, but this provider intentionally starts with the
-  process-free OAuth-backed Cloud Code API.
+  ignored in the `fetchAvailableModels` fallback path.
+- The local Antigravity/`agy` language-server exposes the same
+  `RetrieveUserQuotaSummary` payload over a local HTTPS port while the app or
+  CLI process is running. `token-burn` intentionally stays process-free and
+  calls the remote Cloud Code copy of the same endpoint instead, so no local
+  process discovery or port scanning is required.

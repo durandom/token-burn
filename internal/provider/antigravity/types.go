@@ -24,6 +24,46 @@ type quotaInfo struct {
 	ResetTime         string   `json:"resetTime"`
 }
 
+// codeAssistInfo is the parsed shape of /v1internal:loadCodeAssist, used to
+// resolve the Cloud project ID that /v1internal:retrieveUserQuotaSummary
+// requires and to surface the account's plan/tier name.
+type codeAssistInfo struct {
+	CloudaicompanionProject string `json:"cloudaicompanionProject"`
+	ProjectID               string `json:"projectId"`
+	Project                 string `json:"project"`
+	CurrentTier             struct {
+		ID string `json:"id"`
+	} `json:"currentTier"`
+	PaidTier struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"paidTier"`
+}
+
+// quotaSummaryResponse is the parsed shape of
+// /v1internal:retrieveUserQuotaSummary. It reports one group per model tier
+// (Gemini, Claude and GPT) with real five-hour and weekly buckets, unlike
+// fetchAvailableModels which only exposes a coarse, unreliable per-model
+// fraction and no weekly data at all.
+type quotaSummaryResponse struct {
+	Groups []quotaSummaryGroup `json:"groups"`
+}
+
+type quotaSummaryGroup struct {
+	DisplayName string               `json:"displayName"`
+	Description string               `json:"description"`
+	Buckets     []quotaSummaryBucket `json:"buckets"`
+}
+
+type quotaSummaryBucket struct {
+	BucketID          string  `json:"bucketId"`
+	DisplayName       string  `json:"displayName"`
+	Window            string  `json:"window"`
+	ResetTime         string  `json:"resetTime"`
+	Description       string  `json:"description"`
+	RemainingFraction float64 `json:"remainingFraction"`
+}
+
 type modelQuota struct {
 	Label             string
 	ModelID           string

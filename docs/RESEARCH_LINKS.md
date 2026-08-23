@@ -53,14 +53,21 @@ libraries. `token-burn` does not import OpenUsage internals.
 
 ## Google Antigravity
 
-- CodexBar Antigravity provider notes:
+- CodexBar Antigravity provider notes, including the documented "all-100%
+  fetchAvailableModels payload" false-positive pattern this fix addresses:
   https://github.com/steipete/CodexBar/blob/main/docs/antigravity.md
-- OpenUsage Antigravity provider notes and plugin strategy:
+- OpenUsage Antigravity provider notes and plugin strategy, including its
+  "Not started" vs. real-zero distinction for a pool's rolling window:
   https://github.com/robinebers/openusage/blob/main/docs/providers/antigravity.md
 - Antigravity Usage CLI:
   https://github.com/skainguyen1412/antigravity-usage
-- Antigravity Usage Checker:
+- Antigravity Usage Checker (Go; fetchAvailableModels only, same legacy
+  limitation `token-burn` moved away from):
   https://github.com/tungcorn/antigravity-usage-checker
+- AiRouter's Go implementation of `loadCodeAssist` +
+  `retrieveUserQuotaSummary`, used as the field-name reference for
+  `token-burn`'s own implementation of those two endpoints:
+  https://github.com/Dino-VN/AiRouter/blob/main/internal/provider/antigravity.go
 
 ## xAI/Grok
 

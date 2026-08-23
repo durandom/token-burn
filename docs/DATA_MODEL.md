@@ -100,7 +100,9 @@ Window names should be stable and low-cardinality:
 - `completions`
 - `ai_credits`
 - `gemini`
+- `gemini_weekly`
 - `claude_and_gpt`
+- `claude_and_gpt_weekly`
 
 Additional provider-internal feature names may be present in storage, but UI
 surfaces should prefer stable human labels when the raw feature name is not

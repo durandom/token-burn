@@ -24,11 +24,17 @@ func TestFetchMapsCloudCodeModels(t *testing.T) {
 
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1internal:loadCodeAssist" {
+			// No project ID in this fixture, so fetchSnapshot falls back to
+			// the legacy fetchAvailableModels path exercised below.
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
 		if r.URL.Path != "/v1internal:fetchAvailableModels" {
-			t.Fatalf("path = %q, want /v1internal:fetchAvailableModels", r.URL.Path)
+			t.Fatalf("path = %q, want loadCodeAssist or fetchAvailableModels", r.URL.Path)
 		}
 		gotAuth = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"models": {
 				"gemini-3-pro": {
@@ -79,7 +85,7 @@ func TestFetchMapsCloudCodeModels(t *testing.T) {
 	if gotAuth != "Bearer agy-token" {
 		t.Fatalf("Authorization = %q, want bearer token", gotAuth)
 	}
-	if snap.Provider != "antigravity" || snap.Source != source || snap.AccountID != "antigravity-default" {
+	if snap.Provider != "antigravity" || snap.Source != sourceAvailableModels || snap.AccountID != "antigravity-default" {
 		t.Fatalf("snapshot metadata = %#v", snap)
 	}
 	byName := windowsByName(snap.Windows)
@@ -94,6 +100,111 @@ func TestFetchMapsCloudCodeModels(t *testing.T) {
 	}
 	if got := snap.Raw["gemini_model"]; got != "gemini-3-pro" {
 		t.Fatalf("gemini_model = %#v, want gemini-3-pro", got)
+	}
+}
+
+// TestFetchPrefersQuotaSummaryOverLegacyModels replays a real
+// retrieveUserQuotaSummary payload captured while a Gemini five-hour window
+// was genuinely exhausted ("Individual quota reached ... resets in 2h").
+// fetchAvailableModels could not represent this: it has no weekly bucket at
+// all, and once a pool is blocked it tends to stop reporting real fractions
+// for that pool's models rather than reporting them as exhausted.
+func TestFetchPrefersQuotaSummaryOverLegacyModels(t *testing.T) {
+	stateDB := writeStateDB(t, tokenEnvelope("agy-token", time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)))
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+
+	var fetchAvailableModelsCalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1internal:loadCodeAssist":
+			_, _ = w.Write([]byte(`{
+				"cloudaicompanionProject": "round-yew-rtd9f",
+				"currentTier": {"id": "free-tier"},
+				"paidTier": {"id": "g1-pro-tier", "name": "Google AI Pro"}
+			}`))
+		case "/v1internal:retrieveUserQuotaSummary":
+			_, _ = w.Write([]byte(`{
+				"groups": [
+					{
+						"displayName": "Gemini Models",
+						"description": "Models within this group: Gemini Flash, Gemini Pro",
+						"buckets": [
+							{
+								"bucketId": "gemini-weekly",
+								"displayName": "Weekly Limit Remaining",
+								"window": "weekly",
+								"resetTime": "2026-06-26T13:49:38Z",
+								"description": "You have hit your 5-hour limit, so the weekly limit does not currently apply.",
+								"remainingFraction": 0.5140309
+							},
+							{
+								"bucketId": "gemini-5h",
+								"displayName": "Five Hour Limit Remaining",
+								"window": "5h",
+								"resetTime": "2026-06-19T12:06:27Z",
+								"description": "You have hit your 5-hour limit, it will refresh in 2 hours, 22 minutes.",
+								"remainingFraction": 0
+							}
+						]
+					},
+					{
+						"displayName": "Claude and GPT models",
+						"description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+						"buckets": [
+							{"bucketId": "3p-weekly", "displayName": "Weekly Limit Remaining", "window": "weekly", "resetTime": "2026-06-27T09:44:05Z", "remainingFraction": 1},
+							{"bucketId": "3p-5h", "displayName": "Five Hour Limit Remaining", "window": "5h", "resetTime": "2026-06-19T14:44:05Z", "remainingFraction": 1}
+						]
+					}
+				]
+			}`))
+		case "/v1internal:fetchAvailableModels":
+			fetchAvailableModelsCalled = true
+			_, _ = w.Write([]byte(`{"models":{}}`))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	snap, err := (&Provider{
+		BaseURLs:       []string{server.URL},
+		StateDBPaths:   []string{stateDB},
+		KeychainSecret: func() (string, error) { return "", nil },
+		CLITokenPath:   filepath.Join(t.TempDir(), "missing-cli-token"),
+		Now:            func() time.Time { return now },
+	}).Fetch(context.Background(), usageprovider.Account{ID: "antigravity-default"})
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if fetchAvailableModelsCalled {
+		t.Fatal("fetchAvailableModels was called even though retrieveUserQuotaSummary succeeded")
+	}
+	if snap.PlanType != "Google AI Pro" {
+		t.Fatalf("PlanType = %q, want Google AI Pro", snap.PlanType)
+	}
+
+	byName := windowsByName(snap.Windows)
+	if got := byName["gemini"].UsedPercent; math.Abs(got-100) > 0.0001 {
+		t.Fatalf("gemini (5h) used = %v, want 100 (exhausted)", got)
+	}
+	if !byName["gemini"].LimitReached {
+		t.Fatal("gemini (5h) window should report LimitReached")
+	}
+	if byName["gemini"].ResetAt == nil || byName["gemini"].ResetAt.Format(time.RFC3339) != "2026-06-19T12:06:27Z" {
+		t.Fatalf("gemini (5h) reset = %v", byName["gemini"].ResetAt)
+	}
+	if got := byName["gemini_weekly"].UsedPercent; math.Abs(got-48.59691) > 0.001 {
+		t.Fatalf("gemini_weekly used = %v, want ~48.6 (not exhausted)", got)
+	}
+	if got := byName["claude_and_gpt"].UsedPercent; got != 0 {
+		t.Fatalf("claude_and_gpt (5h) used = %v, want 0", got)
+	}
+	if got := byName["claude_and_gpt_weekly"].UsedPercent; got != 0 {
+		t.Fatalf("claude_and_gpt_weekly used = %v, want 0", got)
+	}
+	if got := snap.Raw["gemini_status"]; got != "You have hit your 5-hour limit, it will refresh in 2 hours, 22 minutes." {
+		t.Fatalf("gemini_status = %#v", got)
 	}
 }
 

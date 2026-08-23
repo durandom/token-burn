@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	id              = "antigravity"
-	source          = "google_cloud_code_fetch_available_models"
-	defaultOAuthURL = "https://oauth2.googleapis.com/token"
+	id                    = "antigravity"
+	sourceQuotaSummary    = "google_cloud_code_retrieve_user_quota_summary"
+	sourceAvailableModels = "google_cloud_code_fetch_available_models"
+	defaultOAuthURL       = "https://oauth2.googleapis.com/token"
 )
 
 var defaultBaseURLs = []string{
@@ -77,17 +78,17 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 			}
 			token = refreshed
 		}
-		payload, err := p.fetchAvailableModels(ctx, token.AccessToken)
+		snap, err := p.fetchSnapshot(ctx, token.AccessToken, acct, observedAt, token.Source)
 		if err == nil {
-			return mapFetchModels(payload, acct, observedAt, token.Source), nil
+			return snap, nil
 		}
 		var perr *usageprovider.Error
 		if errors.As(err, &perr) && perr.Code == usageprovider.ErrAuthExpired {
 			refreshed, refreshErr := p.refreshToken(ctx, token.RefreshToken, observedAt)
 			if refreshErr == nil {
-				payload, retryErr := p.fetchAvailableModels(ctx, refreshed.AccessToken)
+				retrySnap, retryErr := p.fetchSnapshot(ctx, refreshed.AccessToken, acct, observedAt, refreshed.Source)
 				if retryErr == nil {
-					return mapFetchModels(payload, acct, observedAt, refreshed.Source), nil
+					return retrySnap, nil
 				}
 				lastErr = retryErr
 				continue
@@ -178,12 +179,83 @@ func (p *Provider) refreshToken(ctx context.Context, refreshToken string, observ
 	return token, nil
 }
 
+// fetchSnapshot prefers the real per-tier five-hour/weekly windows from
+// loadCodeAssist + retrieveUserQuotaSummary. That pair is what Antigravity's
+// own UI reads. fetchAvailableModels is a legacy, per-model-only endpoint: it
+// has no weekly data, and when a pool is currently blocked it tends to stop
+// reporting real numbers for that pool's models entirely (nil quotaInfo)
+// rather than reporting them as exhausted, which silently hid blocked pools
+// instead of showing them. It stays as a fallback for accounts/builds where
+// the quota-summary endpoint isn't available.
+func (p *Provider) fetchSnapshot(ctx context.Context, token string, acct usageprovider.Account, observedAt time.Time, tokenSource string) (usageprovider.Snapshot, error) {
+	info, err := p.loadCodeAssist(ctx, token)
+	if isAuthOrRateLimit(err) {
+		return usageprovider.Snapshot{}, err
+	}
+	if err == nil && strings.TrimSpace(projectID(info)) != "" {
+		summary, sErr := p.retrieveUserQuotaSummary(ctx, token, projectID(info))
+		if isAuthOrRateLimit(sErr) {
+			return usageprovider.Snapshot{}, sErr
+		}
+		if sErr == nil && len(summary.Groups) > 0 {
+			return mapQuotaSummary(summary, info, acct, observedAt, tokenSource), nil
+		}
+	}
+
+	payload, err := p.fetchAvailableModels(ctx, token)
+	if err != nil {
+		return usageprovider.Snapshot{}, err
+	}
+	snap := mapFetchModels(payload, acct, observedAt, tokenSource)
+	if plan := planName(info); plan != "" {
+		snap.PlanType = plan
+	}
+	return snap, nil
+}
+
+func isAuthOrRateLimit(err error) bool {
+	var perr *usageprovider.Error
+	return errors.As(err, &perr) && (perr.Code == usageprovider.ErrAuthExpired || perr.Code == usageprovider.ErrRateLimited)
+}
+
+func projectID(info codeAssistInfo) string {
+	return firstNonEmpty(info.CloudaicompanionProject, info.ProjectID, info.Project)
+}
+
+func planName(info codeAssistInfo) string {
+	return firstNonEmpty(info.PaidTier.Name, info.PaidTier.ID, info.CurrentTier.ID)
+}
+
+func (p *Provider) loadCodeAssist(ctx context.Context, token string) (codeAssistInfo, error) {
+	body := []byte(`{"metadata":{"ideType":"ANTIGRAVITY"}}`)
+	var info codeAssistInfo
+	err := p.callCloudCode(ctx, token, "loadCodeAssist", body, &info)
+	return info, err
+}
+
+func (p *Provider) retrieveUserQuotaSummary(ctx context.Context, token, projectID string) (quotaSummaryResponse, error) {
+	body, err := json.Marshal(map[string]string{"project": projectID})
+	if err != nil {
+		return quotaSummaryResponse{}, fmt.Errorf("antigravity marshal retrieveUserQuotaSummary request: %w", err)
+	}
+	var summary quotaSummaryResponse
+	err = p.callCloudCode(ctx, token, "retrieveUserQuotaSummary", body, &summary)
+	return summary, err
+}
+
 func (p *Provider) fetchAvailableModels(ctx context.Context, token string) (fetchModelsResponse, error) {
-	body := []byte(`{}`)
+	var payload fetchModelsResponse
+	err := p.callCloudCode(ctx, token, "fetchAvailableModels", []byte(`{}`), &payload)
+	return payload, err
+}
+
+// callCloudCode POSTs to a v1internal Cloud Code method against each known
+// base URL in turn, decoding the first successful JSON response into out.
+func (p *Provider) callCloudCode(ctx context.Context, token, method string, body []byte, out any) error {
 	for _, baseURL := range p.baseURLs() {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1internal:fetchAvailableModels", bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1internal:"+method, bytes.NewReader(body))
 		if err != nil {
-			return fetchModelsResponse{}, fmt.Errorf("antigravity create fetchAvailableModels request: %w", err)
+			return fmt.Errorf("antigravity create %s request: %w", method, err)
 		}
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("Content-Type", "application/json")
@@ -192,62 +264,57 @@ func (p *Provider) fetchAvailableModels(ctx context.Context, token string) (fetc
 
 		resp, err := p.httpClient().Do(req)
 		if err != nil {
-			return fetchModelsResponse{}, &usageprovider.Error{
-				Code:     usageprovider.ErrTransientHTTPFailure,
-				Provider: id,
-				Err:      err,
-			}
+			return &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, Err: err}
 		}
-		payload, readErr := readFetchModelsResponse(resp)
+		readErr := decodeCloudCodeResponse(resp, out)
 		if readErr == nil {
-			return payload, nil
+			return nil
 		}
 		var perr *usageprovider.Error
 		if errors.As(readErr, &perr) {
 			if perr.Code == usageprovider.ErrAuthExpired || perr.Code == usageprovider.ErrRateLimited {
-				return fetchModelsResponse{}, readErr
+				return readErr
 			}
 		}
 	}
-	return fetchModelsResponse{}, &usageprovider.Error{
+	return &usageprovider.Error{
 		Code:     usageprovider.ErrTransientHTTPFailure,
 		Provider: id,
-		Err:      errors.New("all antigravity cloud code endpoints failed"),
+		Err:      fmt.Errorf("all antigravity cloud code endpoints failed for %s", method),
 	}
 }
 
-func readFetchModelsResponse(resp *http.Response) (fetchModelsResponse, error) {
+func decodeCloudCodeResponse(resp *http.Response, out any) error {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
-		return fetchModelsResponse{}, fmt.Errorf("antigravity read fetchAvailableModels response: %w", err)
+		return fmt.Errorf("antigravity read cloud code response: %w", err)
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fetchModelsResponse{}, &usageprovider.Error{Code: usageprovider.ErrAuthExpired, Provider: id, HTTPStatus: resp.StatusCode}
+		return &usageprovider.Error{Code: usageprovider.ErrAuthExpired, Provider: id, HTTPStatus: resp.StatusCode}
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return fetchModelsResponse{}, &usageprovider.Error{Code: usageprovider.ErrRateLimited, Provider: id, HTTPStatus: resp.StatusCode}
+		return &usageprovider.Error{Code: usageprovider.ErrRateLimited, Provider: id, HTTPStatus: resp.StatusCode}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fetchModelsResponse{}, &usageprovider.Error{
+		return &usageprovider.Error{
 			Code:       usageprovider.ErrTransientHTTPFailure,
 			Provider:   id,
 			HTTPStatus: resp.StatusCode,
 			Err:        fmt.Errorf("unexpected status: %s", truncate(string(body), 256)),
 		}
 	}
-	var payload fetchModelsResponse
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return fetchModelsResponse{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: err}
+	if err := json.Unmarshal(body, out); err != nil {
+		return &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: err}
 	}
-	return payload, nil
+	return nil
 }
 
 func mapFetchModels(payload fetchModelsResponse, acct usageprovider.Account, observedAt time.Time, tokenSource string) usageprovider.Snapshot {
 	snap := usageprovider.Snapshot{
 		Provider:   id,
 		AccountID:  firstNonEmpty(acct.ID, acct.Alias, acct.ProviderAccountID, "antigravity-default"),
-		Source:     source,
+		Source:     sourceAvailableModels,
 		ObservedAt: observedAt.UTC(),
 		Raw: map[string]any{
 			"token_source": tokenSource,
@@ -283,6 +350,65 @@ func mapFetchModels(payload fetchModelsResponse, acct usageprovider.Account, obs
 		snap.Raw[pool+"_label"] = quota.Label
 	}
 	return snap
+}
+
+// mapQuotaSummary maps retrieveUserQuotaSummary's real per-tier buckets into
+// windows. Each group (Gemini, Claude and GPT) carries a five-hour and a
+// weekly bucket; the five-hour bucket keeps the existing "gemini" /
+// "claude_and_gpt" window names for continuity with prior history, and the
+// weekly bucket gets a "_weekly" suffix, matching the seven_day_sonnet /
+// seven_day_opus naming convention used for Claude's per-scope windows.
+func mapQuotaSummary(summary quotaSummaryResponse, info codeAssistInfo, acct usageprovider.Account, observedAt time.Time, tokenSource string) usageprovider.Snapshot {
+	snap := usageprovider.Snapshot{
+		Provider:   id,
+		AccountID:  firstNonEmpty(acct.ID, acct.Alias, acct.ProviderAccountID, "antigravity-default"),
+		PlanType:   planName(info),
+		Source:     sourceQuotaSummary,
+		ObservedAt: observedAt.UTC(),
+		Raw: map[string]any{
+			"token_source": tokenSource,
+			"project_id":   projectID(info),
+		},
+	}
+
+	for _, group := range summary.Groups {
+		pool := quotaSummaryPool(group.DisplayName)
+		for _, bucket := range group.Buckets {
+			name := pool
+			switch strings.ToLower(strings.TrimSpace(bucket.Window)) {
+			case "5h", "five-hour", "five_hour", "":
+				// keep the bare pool name
+			case "weekly", "week":
+				name = pool + "_weekly"
+			default:
+				name = pool + "_" + usageprovider.NormalizeWindowName(bucket.Window)
+			}
+
+			used := (1 - bucket.RemainingFraction) * 100
+			remaining := bucket.RemainingFraction * 100
+			resetAt := parseReset(bucket.ResetTime)
+			win, ok := usageprovider.NewWindow(name, usageprovider.WindowOptions{
+				UsedPercent:      &used,
+				RemainingPercent: &remaining,
+				ResetAt:          resetAt,
+			})
+			if !ok {
+				continue
+			}
+			snap.Windows = append(snap.Windows, win)
+			if strings.TrimSpace(bucket.Description) != "" {
+				snap.Raw[name+"_status"] = bucket.Description
+			}
+		}
+	}
+	return snap
+}
+
+func quotaSummaryPool(displayName string) string {
+	if strings.Contains(strings.ToLower(displayName), "gemini") {
+		return "gemini"
+	}
+	return "claude_and_gpt"
 }
 
 func modelQuotas(payload fetchModelsResponse) []modelQuota {
