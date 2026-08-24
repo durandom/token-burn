@@ -41,7 +41,14 @@ type Client struct {
 }
 
 func NewClient(cfg config.OTelReadConfig) Client {
-	return Client{Config: cfg, Username: os.Getenv(cfg.UsernameEnv), Password: os.Getenv(cfg.PasswordEnv)}
+	username, password := cfg.Username, cfg.Password
+	if username == "" {
+		username = os.Getenv(cfg.UsernameEnv)
+	}
+	if password == "" {
+		password = os.Getenv(cfg.PasswordEnv)
+	}
+	return Client{Config: cfg, Username: username, Password: password}
 }
 
 type metricPoint struct {
@@ -83,6 +90,36 @@ var metricNames = []string{
 }
 
 func (c Client) Fetch(ctx context.Context, now time.Time) (Snapshot, error) {
+	return c.fetch(ctx, now.Add(-c.Config.Lookback), now, true)
+}
+
+// FetchHistory returns usage samples from OpenObserve rather than only the
+// latest sample per provider/account/window.
+func (c Client) FetchHistory(ctx context.Context, start, end time.Time, filter store.HistoryFilter) ([]store.Sample, error) {
+	snapshot, err := c.fetch(ctx, start, end, false)
+	if err != nil {
+		return nil, err
+	}
+	samples := make([]store.Sample, 0, len(snapshot.Samples))
+	for _, sample := range snapshot.Samples {
+		if filter.Provider != "" && sample.Provider != filter.Provider {
+			continue
+		}
+		if filter.AccountID != "" && sample.AccountID != filter.AccountID {
+			continue
+		}
+		if filter.WindowName != "" && sample.WindowName != filter.WindowName {
+			continue
+		}
+		samples = append(samples, sample)
+		if filter.Limit > 0 && len(samples) >= filter.Limit {
+			break
+		}
+	}
+	return samples, nil
+}
+
+func (c Client) fetch(ctx context.Context, start, now time.Time, latestOnly bool) (Snapshot, error) {
 	if strings.TrimSpace(c.Config.Endpoint) == "" {
 		return Snapshot{}, errors.New("otel.read.endpoint is required")
 	}
@@ -107,7 +144,7 @@ func (c Client) Fetch(ctx context.Context, now time.Time) (Snapshot, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			points, err := c.queryMetric(ctx, name, now.Add(-c.Config.Lookback), now)
+			points, err := c.queryMetric(ctx, name, start, now)
 			results <- result{name: name, points: points, err: err}
 		}()
 	}
@@ -119,9 +156,12 @@ func (c Client) Fetch(ctx context.Context, now time.Time) (Snapshot, error) {
 		if result.err != nil {
 			return Snapshot{}, result.err
 		}
-		byMetric[result.name] = latestPoints(result.points)
+		if latestOnly {
+			result.points = latestPoints(result.points)
+		}
+		byMetric[result.name] = result.points
 	}
-	return assemble(byMetric), nil
+	return assemble(byMetric, latestOnly), nil
 }
 
 func (c Client) queryMetric(ctx context.Context, metric string, start, end time.Time) ([]metricPoint, error) {
@@ -202,7 +242,7 @@ func latestPoints(points []metricPoint) []metricPoint {
 	return out
 }
 
-func assemble(metrics map[string][]metricPoint) Snapshot {
+func assemble(metrics map[string][]metricPoint, latestOnly bool) Snapshot {
 	type values struct {
 		used                                                   metricPoint
 		remaining, reset, window                               *metricPoint
@@ -212,6 +252,9 @@ func assemble(metrics map[string][]metricPoint) Snapshot {
 	for name, points := range metrics {
 		for _, point := range points {
 			key := point.Provider + "\x00" + point.Account + "\x00" + point.Window
+			if !latestOnly {
+				key += fmt.Sprintf("\x00%d", point.Timestamp)
+			}
 			row := rows[key]
 			if row == nil {
 				row = &values{}
@@ -283,6 +326,9 @@ func assemble(metrics map[string][]metricPoint) Snapshot {
 		out.Forecasts = append(out.Forecasts, Forecast{Provider: sample.Provider, Account: sample.AccountID, Window: sample.WindowName, Result: result})
 	}
 	sort.Slice(out.Samples, func(i, j int) bool {
+		if !out.Samples[i].ObservedAt.Equal(out.Samples[j].ObservedAt) {
+			return out.Samples[i].ObservedAt.Before(out.Samples[j].ObservedAt)
+		}
 		return out.Samples[i].Provider+out.Samples[i].AccountID+out.Samples[i].WindowName < out.Samples[j].Provider+out.Samples[j].AccountID+out.Samples[j].WindowName
 	})
 	sort.Slice(out.Forecasts, func(i, j int) bool {

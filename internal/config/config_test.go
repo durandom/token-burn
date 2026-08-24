@@ -26,6 +26,8 @@ export_interval = "30s"
 mode = "auto"
 endpoint = "https://observe.example.test"
 organization = "token-burn"
+username = "reader@example.test"
+password = "config-secret"
 username_env = "TEST_O2_USER"
 password_env = "TEST_O2_PASSWORD"
 lookback = "12h"
@@ -55,6 +57,9 @@ auth_file = "/tmp/codex-auth.json"
 	}
 	if cfg.OTel.Read.Mode != "auto" || cfg.OTel.Read.Endpoint != "https://observe.example.test" || cfg.OTel.Read.Organization != "token-burn" || cfg.OTel.Read.Lookback != 12*time.Hour {
 		t.Fatalf("OTel.Read = %#v", cfg.OTel.Read)
+	}
+	if cfg.OTel.Read.Username != "reader@example.test" || cfg.OTel.Read.Password != "config-secret" {
+		t.Fatalf("OTel.Read credentials were not loaded")
 	}
 	if len(cfg.Accounts) != 1 || cfg.Accounts[0].Provider != "codex" {
 		t.Fatalf("Accounts = %#v, want one codex account", cfg.Accounts)

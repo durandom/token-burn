@@ -231,7 +231,8 @@ logs or pricing tables.
 By default, the TUI reads SQLite only. Provider polling belongs to the daemon,
 so refreshing the dashboard does not create extra provider requests.
 
-Alternatively, the TUI and `status` command can read exported metrics from an
+Alternatively, the TUI and read-oriented commands (`status`, `once`, `history`,
+and `forecast`) can read exported metrics from an
 OpenObserve backend. This lets another machine show quota state without local
 provider credentials or a polling daemon. Configure `[otel.read]` with one of
 these modes:
@@ -250,8 +251,17 @@ password_env = "OPENOBSERVE_PASSWORD"
 lookback = "24h"
 ```
 
-Set the named environment variables before running `token-burn tui` or
-`token-burn status`. Keep credentials out of `config.toml`. OpenObserve reads
+Set the named environment variables before running a read command. On a
+single-user machine, credentials may instead be stored directly in the
+mode-0600 config file:
+
+```toml
+[otel.read]
+username = "reader@example.com"
+password = "secret"
+```
+
+Direct values take precedence over environment variables. OpenObserve reads
 are bounded by `lookback`; the client only combines auxiliary and forecast
 metrics from the same recent export as each usage sample.
 
@@ -310,6 +320,16 @@ enabled = false
 endpoint = "http://localhost:4318"
 protocol = "http/protobuf"
 export_interval = "60s"
+
+[otel.read]
+mode = "sqlite"
+endpoint = ""
+organization = "default"
+username = ""
+password = ""
+username_env = "OPENOBSERVE_USER"
+password_env = "OPENOBSERVE_PASSWORD"
+lookback = "24h"
 
 [[accounts]]
 provider = "codex"
