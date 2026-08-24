@@ -258,8 +258,9 @@ func addScopedLimits(snap *usageprovider.Snapshot, limits []usageLimit) {
 			}
 		}
 		win, ok := usageprovider.NewWindow(name, usageprovider.WindowOptions{
-			UsedPercent: limit.Percent,
-			ResetAt:     resetAt,
+			UsedPercent:   limit.Percent,
+			ResetAt:       resetAt,
+			WindowSeconds: windowSecondsForName(name),
 		})
 		if !ok {
 			continue
@@ -308,13 +309,27 @@ func addBucket(snap *usageprovider.Snapshot, name string, bucket *usageBucket) {
 		}
 	}
 	win, ok := usageprovider.NewWindow(name, usageprovider.WindowOptions{
-		UsedPercent: bucket.Utilization,
-		ResetAt:     resetAt,
+		UsedPercent:   bucket.Utilization,
+		ResetAt:       resetAt,
+		WindowSeconds: windowSecondsForName(name),
 	})
 	if !ok {
 		return
 	}
 	snap.Windows = append(snap.Windows, win)
+}
+
+func windowSecondsForName(name string) *int {
+	seconds := 0
+	switch {
+	case name == "five_hour":
+		seconds = 5 * 60 * 60
+	case name == "seven_day" || strings.HasPrefix(name, "seven_day_"):
+		seconds = 7 * 24 * 60 * 60
+	default:
+		return nil
+	}
+	return &seconds
 }
 
 func (b *usageBucket) extraUsageEnabled() bool {

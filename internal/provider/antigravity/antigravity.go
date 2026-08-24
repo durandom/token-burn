@@ -342,6 +342,7 @@ func mapFetchModels(payload fetchModelsResponse, acct usageprovider.Account, obs
 			UsedPercent:      &used,
 			RemainingPercent: &remaining,
 			ResetAt:          resetAt,
+			WindowSeconds:    quotaWindowSeconds(false),
 		})
 		if ok {
 			snap.Windows = append(snap.Windows, win)
@@ -391,6 +392,7 @@ func mapQuotaSummary(summary quotaSummaryResponse, info codeAssistInfo, acct usa
 				UsedPercent:      &used,
 				RemainingPercent: &remaining,
 				ResetAt:          resetAt,
+				WindowSeconds:    quotaWindowSeconds(strings.HasSuffix(name, "_weekly")),
 			})
 			if !ok {
 				continue
@@ -402,6 +404,14 @@ func mapQuotaSummary(summary quotaSummaryResponse, info codeAssistInfo, acct usa
 		}
 	}
 	return snap
+}
+
+func quotaWindowSeconds(weekly bool) *int {
+	seconds := 5 * 60 * 60
+	if weekly {
+		seconds = 7 * 24 * 60 * 60
+	}
+	return &seconds
 }
 
 func quotaSummaryPool(displayName string) string {
