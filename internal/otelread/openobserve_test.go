@@ -53,6 +53,18 @@ func TestQueryMetricUsesMetricsSearchAndBasicAuth(t *testing.T) {
 	}
 }
 
+func TestNewClientPrefersConfiguredCredentials(t *testing.T) {
+	t.Setenv("TEST_O2_USER", "environment-user")
+	t.Setenv("TEST_O2_PASSWORD", "environment-password")
+	client := NewClient(config.OTelReadConfig{
+		Username: "configured-user", Password: "configured-password",
+		UsernameEnv: "TEST_O2_USER", PasswordEnv: "TEST_O2_PASSWORD",
+	})
+	if client.Username != "configured-user" || client.Password != "configured-password" {
+		t.Fatalf("credentials = %q/%q", client.Username, client.Password)
+	}
+}
+
 func TestAssembleBuildsSamplesAndForecasts(t *testing.T) {
 	keyPoint := metricPoint{Timestamp: 1787572800000000, Provider: "claude", Account: "claude-default", Window: "seven_day", PlanType: "max", Source: "anthropic", Value: 61}
 	withValue := func(value float64) metricPoint { point := keyPoint; point.Value = value; return point }
@@ -63,7 +75,7 @@ func TestAssembleBuildsSamplesAndForecasts(t *testing.T) {
 		otel.MetricUsageWindowSeconds:            {withValue(604800)},
 		otel.MetricForecastBurnRatePercentPerHr:  {withValue(0.8)},
 		otel.MetricForecastProjectedResetPercent: {withValue(128)},
-	})
+	}, true)
 	if len(result.Samples) != 1 || len(result.Forecasts) != 1 {
 		t.Fatalf("result = %#v", result)
 	}
@@ -86,8 +98,19 @@ func TestAssembleDoesNotCombineStaleForecast(t *testing.T) {
 	result := assemble(map[string][]metricPoint{
 		otel.MetricUsageUsedPercent:              {used},
 		otel.MetricForecastProjectedResetPercent: {oldForecast},
-	})
+	}, true)
 	if got := result.Forecasts[0].Result.ProjectedResetPercent; got != nil {
 		t.Fatalf("ProjectedResetPercent = %v, want nil for stale metric", *got)
+	}
+}
+
+func TestAssembleHistoryKeepsExportTimestampsSeparate(t *testing.T) {
+	first := metricPoint{Timestamp: 1787572800000000, Provider: "claude", Account: "claude-default", Window: "seven_day", Value: 40}
+	second := first
+	second.Timestamp += int64(time.Minute / time.Microsecond)
+	second.Value = 42
+	result := assemble(map[string][]metricPoint{otel.MetricUsageUsedPercent: {second, first}}, false)
+	if len(result.Samples) != 2 || result.Samples[0].UsedPercent != 40 || result.Samples[1].UsedPercent != 42 {
+		t.Fatalf("history samples = %#v", result.Samples)
 	}
 }

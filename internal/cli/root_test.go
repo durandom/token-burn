@@ -14,6 +14,7 @@ import (
 
 	"github.com/durandom/token-burn/internal/config"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
+	"github.com/durandom/token-burn/internal/store"
 )
 
 func TestLatestStatusSamplesFallsBackToOpenObserve(t *testing.T) {
@@ -39,6 +40,17 @@ func TestLatestStatusSamplesFallsBackToOpenObserve(t *testing.T) {
 	}
 	if len(samples) != 1 || samples[0].Provider != "claude" || samples[0].UsedPercent != 61 {
 		t.Fatalf("samples = %#v", samples)
+	}
+}
+
+func TestSnapshotsFromSamplesGroupsAccounts(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	snapshots := snapshotsFromSamples([]store.Sample{
+		{ObservedAt: now, Provider: "claude", AccountID: "claude-default", WindowName: "five_hour", UsedPercent: 10},
+		{ObservedAt: now, Provider: "claude", AccountID: "claude-default", WindowName: "seven_day", UsedPercent: 20},
+	})
+	if len(snapshots) != 1 || len(snapshots[0].Windows) != 2 {
+		t.Fatalf("snapshots = %#v", snapshots)
 	}
 }
 

@@ -125,9 +125,11 @@ An OpenObserve dashboard template is included at
 
 OTLP is an ingestion protocol and does not provide a read API. `token-burn`
 supports reading its exported metrics through OpenObserve's Search API for the
-`tui` and `status` commands. The read endpoint is configured separately from
-the OTLP export endpoint under `[otel.read]`; Basic Auth credentials are read
-from the configured environment-variable names.
+`tui`, `status`, `once`, `history`, and `forecast` commands. The read endpoint
+is configured separately from the OTLP export endpoint under `[otel.read]`.
+Basic Auth credentials can be stored directly as `username` and `password` in
+the mode-0600 config file, or read from the configured environment-variable
+names. Direct values take precedence.
 
 In `auto` mode, fresh local SQLite samples win. OpenObserve is queried when the
 local database cannot be opened, is empty, or its latest samples are stale. Use

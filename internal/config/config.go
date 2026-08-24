@@ -38,6 +38,8 @@ type OTelReadConfig struct {
 	Mode         string
 	Endpoint     string
 	Organization string
+	Username     string
+	Password     string
 	UsernameEnv  string
 	PasswordEnv  string
 	Lookback     time.Duration
@@ -71,6 +73,8 @@ type fileOTelRead struct {
 	Mode         string `toml:"mode"`
 	Endpoint     string `toml:"endpoint"`
 	Organization string `toml:"organization"`
+	Username     string `toml:"username"`
+	Password     string `toml:"password"`
 	UsernameEnv  string `toml:"username_env"`
 	PasswordEnv  string `toml:"password_env"`
 	Lookback     string `toml:"lookback"`
@@ -172,6 +176,12 @@ func Load(path string) (Config, error) {
 	if fc.OTel.Read.Organization != "" {
 		cfg.OTel.Read.Organization = fc.OTel.Read.Organization
 	}
+	if fc.OTel.Read.Username != "" {
+		cfg.OTel.Read.Username = fc.OTel.Read.Username
+	}
+	if fc.OTel.Read.Password != "" {
+		cfg.OTel.Read.Password = fc.OTel.Read.Password
+	}
 	if fc.OTel.Read.UsernameEnv != "" {
 		cfg.OTel.Read.UsernameEnv = fc.OTel.Read.UsernameEnv
 	}
@@ -268,6 +278,8 @@ export_interval = "60s"
 mode = "sqlite"
 endpoint = ""
 organization = "default"
+username = ""
+password = ""
 username_env = "OPENOBSERVE_USER"
 password_env = "OPENOBSERVE_PASSWORD"
 lookback = "24h"

@@ -462,7 +462,16 @@ func newOnceCommand(configPath *string, verbose *bool) *cobra.Command {
 					diag = cmd.ErrOrStderr()
 				}
 			}
-			result := runOnce(ctx, cfg, diag)
+			var result onceResult
+			if cfg.OTel.Read.Mode == "openobserve" {
+				samples, err := latestStatusSamples(ctx, cfg, time.Now())
+				if err != nil {
+					return err
+				}
+				result = onceResult{Snapshots: snapshotsFromSamples(samples), Errors: []commandError{}}
+			} else {
+				result = runOnce(ctx, cfg, diag)
+			}
 			if writeStore {
 				db, err := store.Open(cmd.Context(), cfg.DatabasePath)
 				if err != nil {
@@ -581,19 +590,16 @@ func newHistoryCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			db, err := store.Open(cmd.Context(), cfg.DatabasePath)
-			if err != nil {
-				return err
-			}
-			defer db.Close()
-
-			samples, err := db.History(cmd.Context(), store.HistoryFilter{
+			ctx, cancel := context.WithTimeout(cmd.Context(), cfg.HTTPTimeout)
+			defer cancel()
+			filter := store.HistoryFilter{
 				Provider:   providerName,
 				AccountID:  accountID,
 				WindowName: windowName,
 				Since:      since,
 				Limit:      limit,
-			})
+			}
+			samples, err := historySamples(ctx, cfg, filter, time.Now())
 			if err != nil {
 				return err
 			}
@@ -637,18 +643,15 @@ func newForecastCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			db, err := store.Open(cmd.Context(), cfg.DatabasePath)
-			if err != nil {
-				return err
-			}
-			defer db.Close()
-
-			samples, err := db.History(cmd.Context(), store.HistoryFilter{
+			ctx, cancel := context.WithTimeout(cmd.Context(), cfg.HTTPTimeout)
+			defer cancel()
+			filter := store.HistoryFilter{
 				Provider:   providerName,
 				AccountID:  accountID,
 				WindowName: windowName,
 				Since:      since,
-			})
+			}
+			samples, err := historySamples(ctx, cfg, filter, now)
 			if err != nil {
 				return err
 			}
@@ -666,6 +669,50 @@ func newForecastCommand(configPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&sinceRaw, "since", "7d", "forecast lookback duration")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "print JSON")
 	return cmd
+}
+
+func historySamples(ctx context.Context, cfg config.Config, filter store.HistoryFilter, now time.Time) ([]store.Sample, error) {
+	if cfg.OTel.Read.Mode == "openobserve" {
+		start := now.Add(-cfg.OTel.Read.Lookback)
+		if filter.Since != nil {
+			start = *filter.Since
+		}
+		end := now
+		if filter.Until != nil {
+			end = *filter.Until
+		}
+		return otelread.NewClient(cfg.OTel.Read).FetchHistory(ctx, start, end, filter)
+	}
+	db, err := store.Open(ctx, cfg.DatabasePath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return db.History(ctx, filter)
+}
+
+func snapshotsFromSamples(samples []store.Sample) []usageprovider.Snapshot {
+	byAccount := map[string]*usageprovider.Snapshot{}
+	keys := []string{}
+	for _, sample := range samples {
+		key := sample.Provider + "\x00" + sample.AccountID
+		snapshot := byAccount[key]
+		if snapshot == nil {
+			keys = append(keys, key)
+			snapshot = &usageprovider.Snapshot{Provider: sample.Provider, AccountID: sample.AccountID, PlanType: sample.PlanType, Source: sample.Source, ObservedAt: sample.ObservedAt}
+			byAccount[key] = snapshot
+		}
+		if sample.ObservedAt.After(snapshot.ObservedAt) {
+			snapshot.ObservedAt = sample.ObservedAt
+		}
+		snapshot.Windows = append(snapshot.Windows, usageprovider.Window{Name: sample.WindowName, UsedPercent: sample.UsedPercent, RemainingPercent: sample.RemainingPercent, ResetAt: sample.ResetAt, WindowSeconds: sample.WindowSeconds, LimitReached: sample.LimitReached})
+	}
+	sort.Strings(keys)
+	out := make([]usageprovider.Snapshot, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, *byAccount[key])
+	}
+	return out
 }
 
 type onceResult struct {
