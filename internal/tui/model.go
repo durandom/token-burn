@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/durandom/token-burn/internal/config"
 	"github.com/durandom/token-burn/internal/forecast"
+	"github.com/durandom/token-burn/internal/otelread"
 	"github.com/durandom/token-burn/internal/store"
 )
 
@@ -51,6 +52,7 @@ type Model struct {
 	statuses    map[string]accountPollStatus
 	errors      []string
 	daemonState *store.DaemonState
+	dataSource  string
 }
 
 type tickMsg struct{}
@@ -62,6 +64,7 @@ type refreshMsg struct {
 	lastPoll    time.Time
 	lastGood    time.Time
 	daemonState *store.DaemonState
+	dataSource  string
 }
 
 type accountPollStatus struct {
@@ -131,6 +134,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastPoll = msg.lastPoll
 		m.lastGood = msg.lastGood
 		m.daemonState = msg.daemonState
+		m.dataSource = msg.dataSource
 		return m, nil
 	}
 	return m, nil
@@ -157,7 +161,7 @@ func (m Model) View() string {
 		b.WriteString(st.subtle.Render(" · no successful refresh yet"))
 	}
 	b.WriteString("\n")
-	b.WriteString(st.subtle.Render("q quit  r refresh  " + m.daemonPollLabel(time.Now())))
+	b.WriteString(st.subtle.Render("q quit  r refresh  " + m.sourceLabel(time.Now())))
 	b.WriteString("\n\n")
 
 	if len(m.errors) > 0 {
@@ -233,6 +237,13 @@ func (m Model) constrainView(view string) string {
 		return view
 	}
 	return lipgloss.NewStyle().MaxWidth(max(1, m.width)).Render(view)
+}
+
+func (m Model) sourceLabel(now time.Time) string {
+	if m.dataSource == "openobserve" {
+		return "source OpenObserve"
+	}
+	return m.daemonPollLabel(now)
 }
 
 type usageLayout struct {
@@ -548,58 +559,98 @@ func (m Model) refresh() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
 		defer cancel()
-		db, err := store.Open(ctx, cfg.DatabasePath)
-		if err != nil {
-			return refreshMsg{errors: []string{err.Error()}, lastPoll: time.Now()}
-		}
-		defer db.Close()
-
 		now := time.Now()
-		var errors []string
-		pollStatus := map[string]accountPollStatus{}
-
-		var samples []store.Sample
-		for _, acct := range cfg.Accounts {
-			status, err := latestPollStatus(ctx, db, acct.Provider, acct.ID, now)
-			if err != nil {
-				errors = append(errors, err.Error())
-			} else {
-				pollStatus[accountKey(acct.Provider, acct.ID)] = status
-			}
-
-			latest, err := db.LatestSamples(ctx, acct.Provider, acct.ID)
-			if err != nil {
-				errors = append(errors, err.Error())
-				continue
-			}
-			samples = append(samples, latest...)
-			if sampleAt := latestSampleTime(latest); !sampleAt.IsZero() {
-				key := accountKey(acct.Provider, acct.ID)
-				status := pollStatus[key]
-				status.latestSampleAt = sampleAt
-				if status.latestSuccess.IsZero() {
-					status.latestSuccess = sampleAt
-				}
-				pollStatus[key] = status
-			}
+		if cfg.OTel.Read.Mode == "openobserve" {
+			return remoteRefresh(ctx, cfg, now)
 		}
-		forecasts := buildForecastRows(ctx, db, samples, now)
-		var daemonState *store.DaemonState
-		if state, ok, err := db.LatestDaemonState(ctx); err != nil {
+		local := localRefresh(ctx, cfg, now)
+		localFresh := !local.lastGood.IsZero() && now.Sub(local.lastGood) <= staleSampleThreshold(cfg.PollInterval)
+		if cfg.OTel.Read.Mode != "auto" || localFresh {
+			return local
+		}
+		remote := remoteRefresh(ctx, cfg, now)
+		if len(remote.samples) == 0 && len(remote.errors) > 0 && len(local.errors) > 0 {
+			remote.errors = append(local.errors, remote.errors...)
+		}
+		return remote
+	}
+}
+
+func localRefresh(ctx context.Context, cfg config.Config, now time.Time) refreshMsg {
+	db, err := store.Open(ctx, cfg.DatabasePath)
+	if err != nil {
+		return refreshMsg{errors: []string{err.Error()}, lastPoll: now}
+	}
+	defer db.Close()
+
+	var errors []string
+	pollStatus := map[string]accountPollStatus{}
+
+	var samples []store.Sample
+	for _, acct := range cfg.Accounts {
+		status, err := latestPollStatus(ctx, db, acct.Provider, acct.ID, now)
+		if err != nil {
 			errors = append(errors, err.Error())
-		} else if ok {
-			daemonState = &state
+		} else {
+			pollStatus[accountKey(acct.Provider, acct.ID)] = status
 		}
-		return refreshMsg{
-			samples:     samples,
-			forecasts:   forecasts,
-			statuses:    pollStatus,
-			errors:      errors,
-			lastPoll:    latestPollOrSampleTime(pollStatus, samples),
-			lastGood:    latestSuccessTime(pollStatus, samples),
-			daemonState: daemonState,
+
+		latest, err := db.LatestSamples(ctx, acct.Provider, acct.ID)
+		if err != nil {
+			errors = append(errors, err.Error())
+			continue
+		}
+		samples = append(samples, latest...)
+		if sampleAt := latestSampleTime(latest); !sampleAt.IsZero() {
+			key := accountKey(acct.Provider, acct.ID)
+			status := pollStatus[key]
+			status.latestSampleAt = sampleAt
+			if status.latestSuccess.IsZero() {
+				status.latestSuccess = sampleAt
+			}
+			pollStatus[key] = status
 		}
 	}
+	forecasts := buildForecastRows(ctx, db, samples, now)
+	var daemonState *store.DaemonState
+	if state, ok, err := db.LatestDaemonState(ctx); err != nil {
+		errors = append(errors, err.Error())
+	} else if ok {
+		daemonState = &state
+	}
+	return refreshMsg{
+		samples:     samples,
+		forecasts:   forecasts,
+		statuses:    pollStatus,
+		errors:      errors,
+		lastPoll:    latestPollOrSampleTime(pollStatus, samples),
+		lastGood:    latestSuccessTime(pollStatus, samples),
+		daemonState: daemonState,
+		dataSource:  "sqlite",
+	}
+}
+
+func remoteRefresh(ctx context.Context, cfg config.Config, now time.Time) refreshMsg {
+	snapshot, err := otelread.NewClient(cfg.OTel.Read).Fetch(ctx, now)
+	if err != nil {
+		return refreshMsg{errors: []string{err.Error()}, lastPoll: now}
+	}
+	forecasts := make([]forecastRow, 0, len(snapshot.Forecasts))
+	for _, row := range snapshot.Forecasts {
+		forecasts = append(forecasts, forecastRow{Provider: row.Provider, Account: row.Account, Window: row.Window, Result: row.Result})
+	}
+	statuses := map[string]accountPollStatus{}
+	for _, sample := range snapshot.Samples {
+		key := accountKey(sample.Provider, sample.AccountID)
+		status := statuses[key]
+		if sample.ObservedAt.After(status.latestSuccess) {
+			status.latestSuccess = sample.ObservedAt
+			status.latestSampleAt = sample.ObservedAt
+		}
+		statuses[key] = status
+	}
+	latest := latestSampleTime(snapshot.Samples)
+	return refreshMsg{samples: snapshot.Samples, forecasts: forecasts, statuses: statuses, lastPoll: latest, lastGood: latest, dataSource: "openobserve"}
 }
 
 func latestPollStatus(ctx context.Context, db *store.Store, providerName, accountID string, now time.Time) (accountPollStatus, error) {

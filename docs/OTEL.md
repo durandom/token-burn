@@ -120,3 +120,15 @@ window = test
 An OpenObserve dashboard template is included at
 `contrib/openobserve/token-burn.dashboard.json`. See
 [DASHBOARDS.md](DASHBOARDS.md) for import notes and dashboard scope.
+
+## Reading Metrics Back
+
+OTLP is an ingestion protocol and does not provide a read API. `token-burn`
+supports reading its exported metrics through OpenObserve's Search API for the
+`tui` and `status` commands. The read endpoint is configured separately from
+the OTLP export endpoint under `[otel.read]`; Basic Auth credentials are read
+from the configured environment-variable names.
+
+In `auto` mode, fresh local SQLite samples win. OpenObserve is queried when the
+local database cannot be opened, is empty, or its latest samples are stale. Use
+`openobserve` to force remote reads, or `sqlite` to disable them.
