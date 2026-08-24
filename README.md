@@ -228,8 +228,32 @@ Provider/account headers include a plan label only when the live provider
 response exposes one. `token-burn` does not infer subscription names from local
 logs or pricing tables.
 
-The TUI reads SQLite only. Provider polling belongs to the daemon, so refreshing
-the dashboard does not create extra provider requests.
+By default, the TUI reads SQLite only. Provider polling belongs to the daemon,
+so refreshing the dashboard does not create extra provider requests.
+
+Alternatively, the TUI and `status` command can read exported metrics from an
+OpenObserve backend. This lets another machine show quota state without local
+provider credentials or a polling daemon. Configure `[otel.read]` with one of
+these modes:
+
+- `sqlite`: always use the local database (default)
+- `auto`: prefer fresh local SQLite data, then fall back to OpenObserve
+- `openobserve`: always query OpenObserve
+
+```toml
+[otel.read]
+mode = "openobserve"
+endpoint = "https://observe.example.com"
+organization = "default"
+username_env = "OPENOBSERVE_USER"
+password_env = "OPENOBSERVE_PASSWORD"
+lookback = "24h"
+```
+
+Set the named environment variables before running `token-burn tui` or
+`token-burn status`. Keep credentials out of `config.toml`. OpenObserve reads
+are bounded by `lookback`; the client only combines auxiliary and forecast
+metrics from the same recent export as each usage sample.
 
 ## Commands
 

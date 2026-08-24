@@ -2,14 +2,45 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/durandom/token-burn/internal/config"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 )
+
+func TestLatestStatusSamplesFallsBackToOpenObserve(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "token_burn_usage_used_percent") {
+			_, _ = w.Write([]byte(`{"hits":[{"_timestamp":1787572800000000,"provider":"claude","account_id":"claude-default","window":"seven_day","plan_type":"max","source":"anthropic","value":61}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"hits":[]}`))
+	}))
+	defer server.Close()
+
+	cfg := config.Default()
+	cfg.DatabasePath = filepath.Join(t.TempDir(), "empty.db")
+	cfg.OTel.Read.Mode = "auto"
+	cfg.OTel.Read.Endpoint = server.URL
+	cfg.OTel.Read.Organization = "default"
+	cfg.OTel.Read.Lookback = time.Hour
+	samples, err := latestStatusSamples(context.Background(), cfg, time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("latestStatusSamples() error = %v", err)
+	}
+	if len(samples) != 1 || samples[0].Provider != "claude" || samples[0].UsedPercent != 61 {
+		t.Fatalf("samples = %#v", samples)
+	}
+}
 
 func TestProviderForXAI(t *testing.T) {
 	provider, ok := providerFor("grok")

@@ -18,6 +18,7 @@ import (
 	"github.com/durandom/token-burn/internal/daemon"
 	"github.com/durandom/token-burn/internal/forecast"
 	"github.com/durandom/token-burn/internal/otel"
+	"github.com/durandom/token-burn/internal/otelread"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 	"github.com/durandom/token-burn/internal/provider/antigravity"
 	"github.com/durandom/token-burn/internal/provider/claude"
@@ -500,19 +501,11 @@ func newStatusCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			db, err := store.Open(cmd.Context(), cfg.DatabasePath)
+			ctx, cancel := context.WithTimeout(cmd.Context(), cfg.HTTPTimeout)
+			defer cancel()
+			samples, err := latestStatusSamples(ctx, cfg, time.Now())
 			if err != nil {
 				return err
-			}
-			defer db.Close()
-
-			var samples []store.Sample
-			for _, acct := range cfg.Accounts {
-				latest, err := db.LatestSamples(cmd.Context(), acct.Provider, acct.ID)
-				if err != nil {
-					return err
-				}
-				samples = append(samples, latest...)
 			}
 			if samples == nil {
 				samples = []store.Sample{}
@@ -526,6 +519,45 @@ func newStatusCommand(configPath *string) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "print JSON")
 	return cmd
+}
+
+func latestStatusSamples(ctx context.Context, cfg config.Config, now time.Time) ([]store.Sample, error) {
+	if cfg.OTel.Read.Mode == "openobserve" {
+		remote, err := otelread.NewClient(cfg.OTel.Read).Fetch(ctx, now)
+		return remote.Samples, err
+	}
+	db, localErr := store.Open(ctx, cfg.DatabasePath)
+	var samples []store.Sample
+	if localErr == nil {
+		defer db.Close()
+		for _, acct := range cfg.Accounts {
+			latest, err := db.LatestSamples(ctx, acct.Provider, acct.ID)
+			if err != nil {
+				localErr = err
+				break
+			}
+			samples = append(samples, latest...)
+		}
+	}
+	latest := time.Time{}
+	for _, sample := range samples {
+		if sample.ObservedAt.After(latest) {
+			latest = sample.ObservedAt
+		}
+	}
+	staleAfter := 3 * cfg.PollInterval
+	if staleAfter < 15*time.Minute {
+		staleAfter = 15 * time.Minute
+	}
+	localFresh := !latest.IsZero() && now.Sub(latest) <= staleAfter
+	if cfg.OTel.Read.Mode != "auto" || localFresh {
+		return samples, localErr
+	}
+	remote, remoteErr := otelread.NewClient(cfg.OTel.Read).Fetch(ctx, now)
+	if remoteErr != nil && localErr != nil {
+		return nil, fmt.Errorf("local status: %v; OpenObserve fallback: %w", localErr, remoteErr)
+	}
+	return remote.Samples, remoteErr
 }
 
 func newHistoryCommand(configPath *string) *cobra.Command {

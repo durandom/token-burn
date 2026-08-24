@@ -31,6 +31,16 @@ type OTelConfig struct {
 	Endpoint       string
 	Protocol       string
 	ExportInterval time.Duration
+	Read           OTelReadConfig
+}
+
+type OTelReadConfig struct {
+	Mode         string
+	Endpoint     string
+	Organization string
+	UsernameEnv  string
+	PasswordEnv  string
+	Lookback     time.Duration
 }
 
 type Account struct {
@@ -50,10 +60,20 @@ type fileConfig struct {
 }
 
 type fileOTel struct {
-	Enabled        bool   `toml:"enabled"`
-	Endpoint       string `toml:"endpoint"`
-	Protocol       string `toml:"protocol"`
-	ExportInterval string `toml:"export_interval"`
+	Enabled        bool         `toml:"enabled"`
+	Endpoint       string       `toml:"endpoint"`
+	Protocol       string       `toml:"protocol"`
+	ExportInterval string       `toml:"export_interval"`
+	Read           fileOTelRead `toml:"read"`
+}
+
+type fileOTelRead struct {
+	Mode         string `toml:"mode"`
+	Endpoint     string `toml:"endpoint"`
+	Organization string `toml:"organization"`
+	UsernameEnv  string `toml:"username_env"`
+	PasswordEnv  string `toml:"password_env"`
+	Lookback     string `toml:"lookback"`
 }
 
 func Default() Config {
@@ -65,6 +85,11 @@ func Default() Config {
 			Endpoint:       "http://localhost:4318",
 			Protocol:       "http/protobuf",
 			ExportInterval: 60 * time.Second,
+			Read: OTelReadConfig{
+				Mode: "sqlite", Organization: "default",
+				UsernameEnv: "OPENOBSERVE_USER", PasswordEnv: "OPENOBSERVE_PASSWORD",
+				Lookback: 24 * time.Hour,
+			},
 		},
 		Accounts: []Account{
 			{Provider: "codex", ID: "codex-default"},
@@ -131,6 +156,35 @@ func Load(path string) (Config, error) {
 		cfg.OTel.ExportInterval, err = time.ParseDuration(fc.OTel.ExportInterval)
 		if err != nil {
 			return Config{}, fmt.Errorf("parse otel.export_interval: %w", err)
+		}
+	}
+	if fc.OTel.Read.Mode != "" {
+		cfg.OTel.Read.Mode = fc.OTel.Read.Mode
+	}
+	switch cfg.OTel.Read.Mode {
+	case "sqlite", "auto", "openobserve":
+	default:
+		return Config{}, fmt.Errorf("invalid otel.read.mode %q; want sqlite, auto, or openobserve", cfg.OTel.Read.Mode)
+	}
+	if fc.OTel.Read.Endpoint != "" {
+		cfg.OTel.Read.Endpoint = fc.OTel.Read.Endpoint
+	}
+	if fc.OTel.Read.Organization != "" {
+		cfg.OTel.Read.Organization = fc.OTel.Read.Organization
+	}
+	if fc.OTel.Read.UsernameEnv != "" {
+		cfg.OTel.Read.UsernameEnv = fc.OTel.Read.UsernameEnv
+	}
+	if fc.OTel.Read.PasswordEnv != "" {
+		cfg.OTel.Read.PasswordEnv = fc.OTel.Read.PasswordEnv
+	}
+	if fc.OTel.Read.Lookback != "" {
+		cfg.OTel.Read.Lookback, err = time.ParseDuration(fc.OTel.Read.Lookback)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse otel.read.lookback: %w", err)
+		}
+		if cfg.OTel.Read.Lookback <= 0 {
+			return Config{}, errors.New("otel.read.lookback must be positive")
 		}
 	}
 	if len(fc.Accounts) > 0 {
@@ -209,6 +263,14 @@ enabled = false
 endpoint = "http://localhost:4318"
 protocol = "http/protobuf"
 export_interval = "60s"
+
+[otel.read]
+mode = "sqlite"
+endpoint = ""
+organization = "default"
+username_env = "OPENOBSERVE_USER"
+password_env = "OPENOBSERVE_PASSWORD"
+lookback = "24h"
 
 [[accounts]]
 provider = "codex"
