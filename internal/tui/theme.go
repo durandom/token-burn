@@ -69,6 +69,7 @@ type styles struct {
 	bad       lipgloss.Style
 	provider  lipgloss.Style
 	barBg     lipgloss.Style
+	resetMark lipgloss.Style
 }
 
 func newStyles(theme Theme) styles {
@@ -86,5 +87,6 @@ func newStyles(theme Theme) styles {
 		bad:       lipgloss.NewStyle().Foreground(theme.Bad).Bold(true),
 		provider:  lipgloss.NewStyle().Foreground(theme.Accent).Bold(true),
 		barBg:     lipgloss.NewStyle().Foreground(theme.BarBg),
+		resetMark: lipgloss.NewStyle().Foreground(theme.Bg).Bold(true),
 	}
 }

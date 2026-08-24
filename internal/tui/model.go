@@ -785,7 +785,7 @@ func renderUsageLineWithLayout(st styles, sample store.Sample, forecastRow *fore
 	name := fmt.Sprintf("%-*s", nameWidth, truncateCell(displayWindowName(sample.WindowName), nameWidth))
 	line := "  " + st.heading.Render(name)
 	if layout.barWidth > 0 {
-		line += " " + renderBarWidth(st, sample.UsedPercent, projectedResetPercent(forecastRow), color, layout.barWidth)
+		line += " " + renderBarWidthWithReset(st, sample.UsedPercent, projectedResetPercent(forecastRow), color, layout.barWidth, sample.ResetAt, sample.WindowSeconds, now)
 	}
 	line += " " + color.Render(fmt.Sprintf("%5.1f%%", sample.UsedPercent))
 	if layout.compact {
@@ -859,6 +859,10 @@ func renderBar(st styles, percent float64, projected *float64, color lipgloss.St
 }
 
 func renderBarWidth(st styles, percent float64, projected *float64, color lipgloss.Style, width int) string {
+	return renderBarWidthWithReset(st, percent, projected, color, width, nil, nil, time.Time{})
+}
+
+func renderBarWidthWithReset(st styles, percent float64, projected *float64, color lipgloss.Style, width int, resetAt *time.Time, windowSeconds *int, now time.Time) string {
 	width = max(1, width)
 	if percent < 0 {
 		percent = 0
@@ -895,16 +899,35 @@ func renderBarWidth(st styles, percent float64, projected *float64, color lipglo
 		}
 	}
 
+	marker := -1
+	if resetAt != nil && windowSeconds != nil && *windowSeconds > 0 && resetAt.After(now) {
+		duration := time.Duration(*windowSeconds) * time.Second
+		remaining := resetAt.Sub(now)
+		if remaining <= duration {
+			elapsedFraction := float64(duration-remaining) / float64(duration)
+			marker = min(width-1, max(0, int(elapsedFraction*float64(width))))
+		}
+	}
+
 	var b strings.Builder
 	b.WriteString("[")
-	if filled > 0 {
-		b.WriteString(color.Render(strings.Repeat("█", filled)))
-	}
-	if projectedFilled > filled {
-		b.WriteString(forecastStyle.Render(strings.Repeat("▒", projectedFilled-filled)))
-	}
-	if projectedFilled < width {
-		b.WriteString(st.barBg.Render(strings.Repeat("─", width-projectedFilled)))
+	for i := 0; i < width; i++ {
+		switch {
+		case i == marker:
+			markerColor := st.barBg.GetForeground()
+			if i < filled {
+				markerColor = color.GetForeground()
+			} else if i < projectedFilled {
+				markerColor = forecastStyle.GetForeground()
+			}
+			b.WriteString(st.resetMark.Background(markerColor).Render("│"))
+		case i < filled:
+			b.WriteString(color.Render("█"))
+		case i < projectedFilled:
+			b.WriteString(forecastStyle.Render("▒"))
+		default:
+			b.WriteString(st.barBg.Render("─"))
+		}
 	}
 	b.WriteString("]")
 	return b.String()

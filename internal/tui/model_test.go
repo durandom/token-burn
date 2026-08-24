@@ -693,6 +693,44 @@ func TestRenderUsageLineShowsRelativeResetAndResetFirst(t *testing.T) {
 	}
 }
 
+func TestRenderUsageLineShowsResetTimeMarker(t *testing.T) {
+	model := NewModel(testConfig(t))
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	reset := now.Add(3*24*time.Hour + 12*time.Hour)
+	windowSeconds := 7 * 24 * 60 * 60
+
+	line := renderUsageLine(model.styles, store.Sample{
+		Provider:      "claude",
+		AccountID:     "claude-default",
+		WindowName:    "seven_day",
+		UsedPercent:   61,
+		ResetAt:       &reset,
+		WindowSeconds: &windowSeconds,
+	}, nil, now, model.staleAfter)
+
+	if !strings.Contains(line, "[████████████│██─────────]") {
+		t.Fatalf("line missing midpoint reset marker:\n%s", line)
+	}
+}
+
+func TestRenderUsageLineOmitsResetTimeMarkerWithoutDuration(t *testing.T) {
+	model := NewModel(testConfig(t))
+	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+	reset := now.Add(3 * time.Hour)
+
+	line := renderUsageLine(model.styles, store.Sample{
+		Provider:    "unknown",
+		AccountID:   "unknown-default",
+		WindowName:  "quota",
+		UsedPercent: 50,
+		ResetAt:     &reset,
+	}, nil, now, model.staleAfter)
+
+	if strings.Contains(line, "│") {
+		t.Fatalf("line has reset marker without a known window duration:\n%s", line)
+	}
+}
+
 func TestRenderUsageLineShowsStaleSample(t *testing.T) {
 	model := NewModel(testConfig(t))
 	now := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
