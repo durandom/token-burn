@@ -32,6 +32,9 @@ username_env = "TEST_O2_USER"
 password_env = "TEST_O2_PASSWORD"
 lookback = "12h"
 
+[tui]
+theme = "light"
+
 [[accounts]]
 provider = "codex"
 id = "codex-default"
@@ -57,6 +60,9 @@ auth_file = "/tmp/codex-auth.json"
 	}
 	if cfg.OTel.Read.Mode != "auto" || cfg.OTel.Read.Endpoint != "https://observe.example.test" || cfg.OTel.Read.Organization != "token-burn" || cfg.OTel.Read.Lookback != 12*time.Hour {
 		t.Fatalf("OTel.Read = %#v", cfg.OTel.Read)
+	}
+	if cfg.TUI.Theme != "light" {
+		t.Fatalf("TUI.Theme = %q, want light", cfg.TUI.Theme)
 	}
 	if cfg.OTel.Read.Username != "reader@example.test" || cfg.OTel.Read.Password != "config-secret" {
 		t.Fatalf("OTel.Read credentials were not loaded")

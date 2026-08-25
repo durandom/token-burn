@@ -209,6 +209,7 @@ func parseOptionalRFC3339(flagName, raw string) (*time.Time, error) {
 
 func newTUICommand(configPath *string) *cobra.Command {
 	var layoutName string
+	var themeName string
 	cmd := &cobra.Command{
 		Use:   "tui",
 		Short: "Open the live quota dashboard",
@@ -222,11 +223,18 @@ func newTUICommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if themeName != "" {
+				if _, err := tokenburntui.ParseThemeMode(themeName); err != nil {
+					return err
+				}
+				cfg.TUI.Theme = themeName
+			}
 			_, err = tea.NewProgram(tokenburntui.NewModelWithLayout(cfg, layout), tea.WithAltScreen()).Run()
 			return err
 		},
 	}
 	cmd.Flags().StringVar(&layoutName, "layout", string(tokenburntui.LayoutAuto), "layout mode: auto, normal, compact, or ultra")
+	cmd.Flags().StringVar(&themeName, "theme", "", "theme override: auto, dark, or light")
 	return cmd
 }
 

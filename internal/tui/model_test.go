@@ -615,6 +615,30 @@ func TestBuiltInThemesIncludeBlulocoDarkAndLight(t *testing.T) {
 	}
 }
 
+func TestThemeForMode(t *testing.T) {
+	tests := []struct {
+		mode      ThemeMode
+		dark      bool
+		wantTheme string
+	}{
+		{mode: ThemeAuto, dark: true, wantTheme: "Bluloco Dark"},
+		{mode: ThemeAuto, dark: false, wantTheme: "Bluloco Light"},
+		{mode: ThemeDark, dark: false, wantTheme: "Bluloco Dark"},
+		{mode: ThemeLight, dark: true, wantTheme: "Bluloco Light"},
+	}
+	for _, tt := range tests {
+		if got := ThemeForMode(tt.mode, tt.dark).Name; got != tt.wantTheme {
+			t.Errorf("ThemeForMode(%q, %t) = %q, want %q", tt.mode, tt.dark, got, tt.wantTheme)
+		}
+	}
+}
+
+func TestParseThemeModeRejectsUnknownTheme(t *testing.T) {
+	if _, err := ParseThemeMode("sepia"); err == nil {
+		t.Fatal("ParseThemeMode(sepia) error = nil")
+	}
+}
+
 func TestRenderUsageLineIncludesInlineForecastReason(t *testing.T) {
 	model := NewModel(testConfig(t))
 	line := renderUsageLine(model.styles, store.Sample{

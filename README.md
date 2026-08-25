@@ -174,6 +174,21 @@ Open the dashboard:
 
 ## TUI
 
+The TUI ships with Bluloco Dark and Bluloco Light themes. By default it asks
+the terminal whether its background is dark and selects the matching palette.
+The colors are theme values rather than colors inherited from the shell.
+
+```toml
+[tui]
+theme = "auto" # auto, dark, or light
+```
+
+Override the configured theme for one run with `token-burn tui --theme dark`
+or `token-burn tui --theme light`.
+
+The reset marker uses a colored background inside usage and forecast segments.
+Inside the unused part of the bar it keeps the terminal background transparent.
+
 The TUI is intentionally compact. Account panels use the available terminal
 width, bars scale with it, and quota details collapse onto one line when the
 normal layout would exceed the terminal height. The five-provider default fits

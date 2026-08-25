@@ -93,7 +93,11 @@ func NewModelWithLayout(cfg config.Config, layout LayoutMode) Model {
 	if layout == "" {
 		layout = LayoutAuto
 	}
-	theme := DefaultTheme()
+	mode, err := ParseThemeMode(cfg.TUI.Theme)
+	if err != nil {
+		mode = ThemeAuto
+	}
+	theme := ThemeForMode(mode, lipgloss.HasDarkBackground())
 	return Model{
 		cfg:        cfg,
 		theme:      theme,
@@ -966,12 +970,19 @@ func renderBarWidthWithReset(st styles, percent float64, projected *float64, col
 		switch {
 		case i == marker:
 			markerColor := st.barBg.GetForeground()
+			colored := false
 			if i < filled {
 				markerColor = color.GetForeground()
+				colored = true
 			} else if i < projectedFilled {
 				markerColor = forecastStyle.GetForeground()
+				colored = true
 			}
-			b.WriteString(st.resetMark.Background(markerColor).Render("│"))
+			if colored {
+				b.WriteString(st.resetMark.Background(markerColor).Render("│"))
+			} else {
+				b.WriteString(st.resetMark.Render("│"))
+			}
 		case i < filled:
 			b.WriteString(color.Render("█"))
 		case i < projectedFilled:
