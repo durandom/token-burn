@@ -1,6 +1,35 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+type ThemeMode string
+
+const (
+	ThemeAuto  ThemeMode = "auto"
+	ThemeDark  ThemeMode = "dark"
+	ThemeLight ThemeMode = "light"
+)
+
+func ParseThemeMode(value string) (ThemeMode, error) {
+	switch mode := ThemeMode(strings.ToLower(strings.TrimSpace(value))); mode {
+	case ThemeAuto, ThemeDark, ThemeLight:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid TUI theme %q; want auto, dark, or light", value)
+	}
+}
+
+func ThemeForMode(mode ThemeMode, darkBackground bool) Theme {
+	if mode == ThemeLight || mode == ThemeAuto && !darkBackground {
+		return BlulocoLightTheme()
+	}
+	return BlulocoDarkTheme()
+}
 
 type Theme struct {
 	Name   string
@@ -87,6 +116,6 @@ func newStyles(theme Theme) styles {
 		bad:       lipgloss.NewStyle().Foreground(theme.Bad).Bold(true),
 		provider:  lipgloss.NewStyle().Foreground(theme.Accent).Bold(true),
 		barBg:     lipgloss.NewStyle().Foreground(theme.BarBg),
-		resetMark: lipgloss.NewStyle().Foreground(theme.Bg).Bold(true),
+		resetMark: lipgloss.NewStyle().Foreground(theme.Fg).Bold(true),
 	}
 }

@@ -23,7 +23,12 @@ type Config struct {
 	HTTPTimeout  time.Duration
 	DatabasePath string
 	OTel         OTelConfig
+	TUI          TUIConfig
 	Accounts     []Account
+}
+
+type TUIConfig struct {
+	Theme string
 }
 
 type OTelConfig struct {
@@ -58,7 +63,12 @@ type fileConfig struct {
 	HTTPTimeout  string    `toml:"http_timeout"`
 	DatabasePath string    `toml:"database_path"`
 	OTel         fileOTel  `toml:"otel"`
+	TUI          fileTUI   `toml:"tui"`
 	Accounts     []Account `toml:"accounts"`
+}
+
+type fileTUI struct {
+	Theme string `toml:"theme"`
 }
 
 type fileOTel struct {
@@ -95,6 +105,7 @@ func Default() Config {
 				Lookback: 24 * time.Hour,
 			},
 		},
+		TUI: TUIConfig{Theme: "auto"},
 		Accounts: []Account{
 			{Provider: "codex", ID: "codex-default"},
 			{Provider: "claude", ID: "claude-default"},
@@ -200,6 +211,14 @@ func Load(path string) (Config, error) {
 	if len(fc.Accounts) > 0 {
 		cfg.Accounts = fc.Accounts
 	}
+	if fc.TUI.Theme != "" {
+		cfg.TUI.Theme = fc.TUI.Theme
+	}
+	switch cfg.TUI.Theme {
+	case "auto", "dark", "light":
+	default:
+		return Config{}, fmt.Errorf("invalid tui.theme %q; want auto, dark, or light", cfg.TUI.Theme)
+	}
 
 	return cfg, nil
 }
@@ -273,6 +292,9 @@ enabled = false
 endpoint = "http://localhost:4318"
 protocol = "http/protobuf"
 export_interval = "60s"
+
+[tui]
+theme = "auto"
 
 [otel.read]
 mode = "sqlite"
