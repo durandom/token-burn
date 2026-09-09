@@ -36,9 +36,3 @@ type usagePeriod struct {
 type moneyValue struct {
 	Val *int64 `json:"val"`
 }
-
-type refreshResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    *int64 `json:"expires_in"`
-}

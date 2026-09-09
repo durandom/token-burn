@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -445,6 +446,122 @@ func TestPiCodexReactiveRefreshOnce(t *testing.T) {
 	if refreshCalls != 1 {
 		t.Fatalf("refresh calls = %d", refreshCalls)
 	}
+}
+
+func TestPiCodexInvalidStateSurfacesReloginAndCoolsDown(t *testing.T) {
+	now := time.Date(2026, 9, 9, 16, 0, 0, 0, time.UTC)
+	authPath := writeAuth(t, fmt.Sprintf(`{"openai-codex":{"type":"oauth","access":"old-access","refresh":"old-refresh","expires":%d,"accountId":"account"}}`, now.Add(-time.Minute).UnixMilli()))
+	var refreshCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth" {
+			refreshCalls++
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":"invalid_state","error_description":"old-refresh is dead"}`)
+			return
+		}
+		t.Errorf("unexpected usage call with expired grant")
+	}))
+	defer server.Close()
+	p := &Provider{HTTPClient: server.Client(), BaseURL: server.URL, OAuthURL: server.URL + "/oauth", Now: func() time.Time { return now }}
+	_, err := p.Fetch(context.Background(), usageprovider.Account{AuthFile: authPath})
+	var perr *usageprovider.Error
+	if !errors.As(err, &perr) || perr.Code != usageprovider.ErrAuthExpired {
+		t.Fatalf("error = %v", err)
+	}
+	got := err.Error()
+	if !strings.Contains(got, "invalid_state") || !strings.Contains(got, "/login openai-codex") {
+		t.Fatalf("error = %q", got)
+	}
+	if strings.Contains(got, "old-refresh") {
+		t.Fatalf("error leaked refresh token: %v", err)
+	}
+	_, err = p.Fetch(context.Background(), usageprovider.Account{AuthFile: authPath})
+	if !errors.As(err, &perr) || perr.Code != usageprovider.ErrAuthExpired {
+		t.Fatalf("cooldown error = %v", err)
+	}
+	if refreshCalls != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refreshCalls)
+	}
+}
+
+func TestPiCodexHalfTTLRefresh(t *testing.T) {
+	now := time.Date(2026, 9, 9, 16, 0, 0, 0, time.UTC)
+	access := testAccessJWT(t, now.Add(-6*24*time.Hour), now.Add(4*24*time.Hour))
+	authPath := writeAuth(t, fmt.Sprintf(`{"openai-codex":{"type":"oauth","access":%q,"refresh":"old-refresh","expires":%d,"accountId":"account"}}`, access, now.Add(4*24*time.Hour).UnixMilli()))
+	var refreshCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth" {
+			refreshCalls++
+			fmt.Fprint(w, `{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer new-access" {
+			t.Errorf("auth = %q", r.Header.Get("Authorization"))
+		}
+		fmt.Fprint(w, `{"rate_limit":{"primary_window":{"used_percent":10}}}`)
+	}))
+	defer server.Close()
+	p := &Provider{HTTPClient: server.Client(), BaseURL: server.URL, OAuthURL: server.URL + "/oauth", Now: func() time.Time { return now }}
+	if _, err := p.Fetch(context.Background(), usageprovider.Account{AuthFile: authPath}); err != nil {
+		t.Fatal(err)
+	}
+	if refreshCalls != 1 {
+		t.Fatalf("refresh calls = %d", refreshCalls)
+	}
+}
+
+func TestPiCodexHalfTTLRefreshFailureKeepsUsableToken(t *testing.T) {
+	now := time.Date(2026, 9, 9, 16, 0, 0, 0, time.UTC)
+	access := testAccessJWT(t, now.Add(-6*24*time.Hour), now.Add(4*24*time.Hour))
+	authPath := writeAuth(t, fmt.Sprintf(`{"openai-codex":{"type":"oauth","access":%q,"refresh":"old-refresh","expires":%d,"accountId":"account"}}`, access, now.Add(4*24*time.Hour).UnixMilli()))
+	var refreshCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth" {
+			refreshCalls++
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+access {
+			t.Errorf("auth = %q", r.Header.Get("Authorization"))
+		}
+		fmt.Fprint(w, `{"rate_limit":{"primary_window":{"used_percent":10}}}`)
+	}))
+	defer server.Close()
+	p := &Provider{HTTPClient: server.Client(), BaseURL: server.URL, OAuthURL: server.URL + "/oauth", Now: func() time.Time { return now }}
+	if _, err := p.Fetch(context.Background(), usageprovider.Account{AuthFile: authPath}); err != nil {
+		t.Fatal(err)
+	}
+	if refreshCalls != 1 {
+		t.Fatalf("refresh calls = %d", refreshCalls)
+	}
+}
+
+func TestPiCodexDoesNotRefreshUnderHalfTTL(t *testing.T) {
+	now := time.Date(2026, 9, 9, 16, 0, 0, 0, time.UTC)
+	access := testAccessJWT(t, now.Add(-24*time.Hour), now.Add(9*24*time.Hour))
+	authPath := writeAuth(t, fmt.Sprintf(`{"openai-codex":{"type":"oauth","access":%q,"refresh":"old-refresh","expires":%d,"accountId":"account"}}`, access, now.Add(9*24*time.Hour).UnixMilli()))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth" {
+			t.Error("oauth refresh should not run")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, `{"rate_limit":{"primary_window":{"used_percent":10}}}`)
+	}))
+	defer server.Close()
+	p := &Provider{HTTPClient: server.Client(), BaseURL: server.URL, OAuthURL: server.URL + "/oauth", Now: func() time.Time { return now }}
+	if _, err := p.Fetch(context.Background(), usageprovider.Account{AuthFile: authPath}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testAccessJWT(t *testing.T, iat, exp time.Time) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{"iat": iat.Unix(), "exp": exp.Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 }
 
 func TestConfiguredPiCodexRejectsWrongCredentialType(t *testing.T) {

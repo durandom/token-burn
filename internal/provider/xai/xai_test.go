@@ -456,6 +456,27 @@ func TestRefreshRejectsUnsafeExpiresInBeforeDurationConversion(t *testing.T) {
 	}
 }
 
+func TestRefreshInvalidStateSurfacesRelogin(t *testing.T) {
+	now := time.Date(2026, 7, 30, 13, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"invalid_state","error_description":"secret-refresh is dead"}`)
+	}))
+	defer server.Close()
+	_, err := (&Provider{HTTPClient: server.Client(), OAuthURL: server.URL}).requestRefresh(context.Background(), "secret-refresh", now)
+	var providerErr *usageprovider.Error
+	if !errors.As(err, &providerErr) || providerErr.Code != usageprovider.ErrAuthExpired {
+		t.Fatalf("error = %v", err)
+	}
+	got := err.Error()
+	if !strings.Contains(got, "invalid_state") || !strings.Contains(got, "/login xai") {
+		t.Fatalf("error = %q", got)
+	}
+	if strings.Contains(got, "secret-refresh") {
+		t.Fatalf("error leaked refresh token: %v", err)
+	}
+}
+
 func TestReactiveRefreshOnce(t *testing.T) {
 	now := time.Date(2026, 7, 30, 13, 0, 0, 0, time.UTC)
 	authPath := writeAuth(t, map[string]any{"xai": map[string]any{

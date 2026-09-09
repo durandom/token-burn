@@ -49,9 +49,17 @@ native Codex or Pi format. Without one, native Codex credentials are preferred:
 
 If none is usable, the provider reads Pi's `openai-codex` OAuth entry from
 `${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json`.
-Near-expiry and HTTP 401/403 credentials are refreshed with Pi's OpenAI OAuth
-contract and persisted under the shared Pi lock while preserving unrelated and
-unknown fields.
+Native Codex `auth.json` is read-only. Only the Pi `openai-codex` entry is
+refreshed, using Pi's OpenAI OAuth client and the shared Pi lock while
+preserving unrelated and unknown fields.
+
+OpenAI currently mints Codex access JWTs with about a 10-day `expires_in`.
+Pi credentials are refreshed at 50% of that access-token lifetime, and again
+inside a five-minute expiry skew or after an HTTP 401/403. A failed refresh
+with `invalid_state` or `invalid_grant` is reported as auth-expired and tells
+the operator to run `/login openai-codex` in Pi. The same dead refresh token is
+not POSTed again for 30 minutes. Refresh after the access token's 10-day TTL
+is not guaranteed; a new browser login may be required.
 
 ### Response Shape
 
@@ -356,7 +364,10 @@ are intentionally rejected because xAI API billing is separate from Grok/X
 subscription usage.
 
 Access tokens are refreshed proactively at Pi's stored expiry and once after an
-HTTP 401/403. Refresh uses Pi's xAI OAuth client and existing refresh token:
+HTTP 401/403. Refresh uses Pi's xAI OAuth client and existing refresh token.
+`invalid_state` and `invalid_grant` are reported as auth-expired and tell the
+operator to run `/login xai`; other `400` responses stay transient so a bad
+client id is not diagnosed as a dead login.
 
 ```text
 POST https://auth.x.ai/oauth2/token

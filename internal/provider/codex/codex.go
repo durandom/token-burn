@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/durandom/token-burn/internal/oauthrefresh"
 	"github.com/durandom/token-burn/internal/piauth"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 )
@@ -31,12 +31,13 @@ const (
 )
 
 type Provider struct {
-	HTTPClient *http.Client
-	BaseURL    string
-	OAuthURL   string
-	Now        func() time.Time
-	HomeDir    func() (string, error)
-	Env        func(string) string
+	HTTPClient      *http.Client
+	BaseURL         string
+	OAuthURL        string
+	Now             func() time.Time
+	HomeDir         func() (string, error)
+	Env             func(string) string
+	refreshFailures oauthrefresh.FailureCache
 }
 
 func New() *Provider {
@@ -195,8 +196,15 @@ func (p *Provider) readPiCredential(ctx context.Context, path string, now time.T
 		return resolvedCredential{}, &usageprovider.Error{Code: usageprovider.ErrAuthMissing, Provider: id, Err: errors.New("Pi OpenAI Codex OAuth credentials required")}
 	}
 	resolved := resolvedCredential{Access: credential.Access, AccountID: credential.AccountID, PiStore: store}
-	if credential.Expires > 0 && credential.Expires <= now.Add(piRefreshSkew).UnixMilli() {
-		return p.refreshPiCredential(ctx, resolved, false, now)
+	if !oauthrefresh.NeedsRefresh(now, credential.Access, credential.Expires, piRefreshSkew) {
+		return resolved, nil
+	}
+	refreshed, err := p.refreshPiCredential(ctx, resolved, false, now)
+	if err == nil {
+		return refreshed, nil
+	}
+	if oauthrefresh.Expired(now, credential.Access, credential.Expires) {
+		return resolvedCredential{}, err
 	}
 	return resolved, nil
 }
@@ -209,13 +217,18 @@ func (p *Provider) refreshPiCredential(ctx context.Context, rejected resolvedCre
 		if current.Access != rejected.Access {
 			return nil, nil
 		}
-		if !force && (current.Expires == 0 || current.Expires > now.Add(piRefreshSkew).UnixMilli()) {
+		if err := p.refreshFailures.Check(current.Refresh, now); err != nil {
+			return nil, err
+		}
+		if !force && !oauthrefresh.NeedsRefresh(now, current.Access, current.Expires, piRefreshSkew) {
 			return nil, nil
 		}
 		refreshed, err := p.requestPiRefresh(lockCtx, current, now)
 		if err != nil {
+			p.refreshFailures.Remember(current.Refresh, now, err)
 			return nil, err
 		}
+		p.refreshFailures.Forget(current.Refresh)
 		return &refreshed, nil
 	})
 	if err != nil {
@@ -225,40 +238,21 @@ func (p *Provider) refreshPiCredential(ctx context.Context, rejected resolvedCre
 }
 
 func (p *Provider) requestPiRefresh(ctx context.Context, current piauth.OAuthCredential, now time.Time) (piauth.OAuthCredential, error) {
-	form := url.Values{"grant_type": {"refresh_token"}, "client_id": {openAIOAuthClientID}, "refresh_token": {current.Refresh}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.oauthURL(), strings.NewReader(form.Encode()))
+	token, err := oauthrefresh.Refresh(ctx, oauthrefresh.Config{
+		Provider:     id,
+		TokenURL:     p.oauthURL(),
+		ClientID:     openAIOAuthClientID,
+		ReloginHint:  "run /login openai-codex in Pi",
+		HTTPClient:   p.httpClient(),
+		MaxBodyBytes: maxResponseBytes,
+	}, current.Refresh)
 	if err != nil {
-		return piauth.OAuthCredential{}, fmt.Errorf("codex create OAuth refresh request: %w", err)
+		return piauth.OAuthCredential{}, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	resp, err := p.httpClient().Do(req)
-	if err != nil {
-		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, Err: errors.New("OAuth refresh request failed")}
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
-	if err != nil || len(body) > maxResponseBytes {
-		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("invalid OAuth refresh response")}
-	}
-	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrAuthExpired, Provider: id, HTTPStatus: resp.StatusCode}
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrRateLimited, Provider: id, HTTPStatus: resp.StatusCode}
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, HTTPStatus: resp.StatusCode}
-	}
-	var payload struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int64  `json:"expires_in"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil || strings.TrimSpace(payload.AccessToken) == "" || strings.TrimSpace(payload.RefreshToken) == "" || payload.ExpiresIn <= 0 || payload.ExpiresIn > maxTokenLifetimeSecs {
+	if strings.TrimSpace(token.AccessToken) == "" || strings.TrimSpace(token.RefreshToken) == "" || !token.HasExpiresIn || token.ExpiresIn <= 0 || token.ExpiresIn > maxTokenLifetimeSecs {
 		return piauth.OAuthCredential{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("invalid OAuth refresh payload")}
 	}
-	return piauth.OAuthCredential{Type: "oauth", Access: strings.TrimSpace(payload.AccessToken), Refresh: strings.TrimSpace(payload.RefreshToken), Expires: now.Add(time.Duration(payload.ExpiresIn) * time.Second).UnixMilli(), AccountID: current.AccountID}, nil
+	return piauth.OAuthCredential{Type: "oauth", Access: token.AccessToken, Refresh: token.RefreshToken, Expires: now.Add(time.Duration(token.ExpiresIn) * time.Second).UnixMilli(), AccountID: current.AccountID}, nil
 }
 
 func isPiMissing(err error) bool {

@@ -8,11 +8,11 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/durandom/token-burn/internal/oauthrefresh"
 	"github.com/durandom/token-burn/internal/piauth"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 )
@@ -361,53 +361,31 @@ func (p *Provider) refreshCredential(ctx context.Context, path, rejectedAccess s
 }
 
 func (p *Provider) requestRefresh(ctx context.Context, refreshToken string, now time.Time) (oauthCredential, error) {
-	form := url.Values{}
-	form.Set("grant_type", "refresh_token")
-	form.Set("client_id", xaiOAuthClientID)
-	form.Set("refresh_token", refreshToken)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.oauthURL(), strings.NewReader(form.Encode()))
+	token, err := oauthrefresh.Refresh(ctx, oauthrefresh.Config{
+		Provider:     id,
+		TokenURL:     p.oauthURL(),
+		ClientID:     xaiOAuthClientID,
+		ReloginHint:  "run /login xai",
+		HTTPClient:   p.httpClient(),
+		MaxBodyBytes: maxResponseBytes,
+	}, refreshToken)
 	if err != nil {
-		return oauthCredential{}, fmt.Errorf("xai create OAuth refresh request: %w", err)
+		return oauthCredential{}, err
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := p.httpClient().Do(req)
-	if err != nil {
-		return oauthCredential{}, &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, Err: safeTransportError(err)}
-	}
-	defer resp.Body.Close()
-	body, readErr := readBounded(resp.Body)
-	if readErr != nil {
-		return oauthCredential{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: readErr}
-	}
-	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return oauthCredential{}, &usageprovider.Error{Code: usageprovider.ErrAuthExpired, Provider: id, HTTPStatus: resp.StatusCode}
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return oauthCredential{}, &usageprovider.Error{Code: usageprovider.ErrRateLimited, Provider: id, HTTPStatus: resp.StatusCode}
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return oauthCredential{}, &usageprovider.Error{Code: usageprovider.ErrTransientHTTPFailure, Provider: id, HTTPStatus: resp.StatusCode}
-	}
-	var payload refreshResponse
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return oauthCredential{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("xai OAuth refresh returned malformed JSON")}
-	}
-	if strings.TrimSpace(payload.AccessToken) == "" {
+	if strings.TrimSpace(token.AccessToken) == "" {
 		return oauthCredential{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("xai OAuth refresh response missing access token")}
 	}
 	lifetime := defaultTokenLifetime
-	if payload.ExpiresIn != nil {
-		seconds := *payload.ExpiresIn
-		if seconds <= int64(refreshSkew/time.Second) || seconds > maxTokenLifetimeSeconds {
+	if token.HasExpiresIn {
+		if token.ExpiresIn <= int64(refreshSkew/time.Second) || token.ExpiresIn > maxTokenLifetimeSeconds {
 			return oauthCredential{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("xai OAuth refresh response has invalid expiry")}
 		}
-		lifetime = time.Duration(seconds) * time.Second
+		lifetime = time.Duration(token.ExpiresIn) * time.Second
 	}
 	return oauthCredential{
 		Type:    "oauth",
-		Access:  strings.TrimSpace(payload.AccessToken),
-		Refresh: strings.TrimSpace(payload.RefreshToken),
+		Access:  token.AccessToken,
+		Refresh: token.RefreshToken,
 		Expires: now.Add(lifetime - refreshSkew).UnixMilli(),
 	}, nil
 }
