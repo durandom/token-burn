@@ -51,6 +51,14 @@ func TestViewRendersSamples(t *testing.T) {
 	}
 }
 
+func TestViewRendersRunningVersion(t *testing.T) {
+	model := NewModel(testConfig(t)).WithVersion("v0.1.28")
+	view := model.View()
+	if !strings.Contains(view, "token-burn") || !strings.Contains(view, "v0.1.28") {
+		t.Fatalf("view missing version:\n%s", view)
+	}
+}
+
 func TestParseLayoutMode(t *testing.T) {
 	for _, value := range []string{"auto", "normal", "compact", "ultra", " COMPACT "} {
 		if _, err := ParseLayoutMode(value); err != nil {

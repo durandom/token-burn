@@ -71,7 +71,7 @@ func NewRootCommand(build BuildInfo) *cobra.Command {
 	root.AddCommand(newServiceStatusCommand())
 	root.AddCommand(newOTelTestCommand(&configPath))
 	root.AddCommand(newOTelBackfillCommand(&configPath, build))
-	root.AddCommand(newTUICommand(&configPath))
+	root.AddCommand(newTUICommand(&configPath, build))
 	root.AddCommand(newUpgradeCommand(build))
 
 	return root
@@ -207,7 +207,7 @@ func parseOptionalRFC3339(flagName, raw string) (*time.Time, error) {
 	return &parsed, nil
 }
 
-func newTUICommand(configPath *string) *cobra.Command {
+func newTUICommand(configPath *string, build BuildInfo) *cobra.Command {
 	var layoutName string
 	var themeName string
 	cmd := &cobra.Command{
@@ -229,7 +229,8 @@ func newTUICommand(configPath *string) *cobra.Command {
 				}
 				cfg.TUI.Theme = themeName
 			}
-			_, err = tea.NewProgram(tokenburntui.NewModelWithLayout(cfg, layout), tea.WithAltScreen()).Run()
+			model := tokenburntui.NewModelWithLayout(cfg, layout).WithVersion(build.Version)
+			_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
 			return err
 		},
 	}

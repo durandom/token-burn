@@ -43,6 +43,7 @@ type Model struct {
 	width       int
 	height      int
 	layoutMode  LayoutMode
+	version     string
 	staleAfter  time.Duration
 	lastPoll    time.Time
 	lastGood    time.Time
@@ -84,6 +85,14 @@ type forecastRow struct {
 
 func NewModel(cfg config.Config) Model {
 	return NewModelWithLayout(cfg, LayoutAuto)
+}
+
+func (m Model) WithVersion(version string) Model {
+	m.version = strings.TrimSpace(version)
+	if m.version == "" {
+		m.version = "dev"
+	}
+	return m
 }
 
 func NewModelWithLayout(cfg config.Config, layout LayoutMode) Model {
@@ -148,11 +157,13 @@ func (m Model) View() string {
 	var b strings.Builder
 	st := m.styles
 
-	title := "token-burn"
-	if m.loading {
-		title += "  refreshing..."
+	b.WriteString(st.title.Render("token-burn"))
+	if m.version != "" {
+		b.WriteString(st.subtle.Render(" " + m.version))
 	}
-	b.WriteString(st.title.Render(title))
+	if m.loading {
+		b.WriteString(st.subtle.Render("  refreshing..."))
+	}
 	b.WriteString("  ")
 	if !m.lastPoll.IsZero() {
 		b.WriteString(st.subtle.Render("last poll " + m.lastPoll.Local().Format("15:04:05")))
