@@ -173,11 +173,17 @@ func mapBilling(payload billingResponse, acct usageprovider.Account, observedAt 
 	}
 	cfg := payload.Config
 	var used *float64
-	if cfg.CreditUsagePercent != nil && validPercent(*cfg.CreditUsagePercent) {
+	switch {
+	case cfg.CreditUsagePercent != nil && validPercent(*cfg.CreditUsagePercent):
 		used = cfg.CreditUsagePercent
-	} else if cents(cfg.Used) != nil && cents(cfg.MonthlyLimit) != nil && *cents(cfg.MonthlyLimit) > 0 {
+	case cents(cfg.Used) != nil && cents(cfg.MonthlyLimit) != nil && *cents(cfg.MonthlyLimit) > 0:
 		value := float64(*cents(cfg.Used)) / float64(*cents(cfg.MonthlyLimit)) * 100
 		used = &value
+	case cfg.CurrentPeriod != nil && cfg.CreditUsagePercent == nil:
+		// After a period reset the proxy omits creditUsagePercent until the
+		// account spends. That is a real zero, not a missing contract.
+		zero := 0.0
+		used = &zero
 	}
 	if used == nil {
 		return usageprovider.Snapshot{}, &usageprovider.Error{Code: usageprovider.ErrInvalidResponse, Provider: id, Err: errors.New("billing response missing usable quota")}

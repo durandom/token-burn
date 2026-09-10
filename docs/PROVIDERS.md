@@ -412,8 +412,10 @@ Relevant current fields:
 An explicitly weekly current period maps to `weekly`; an explicitly monthly
 period maps to `monthly`. Modern responses with an absent or unknown period type
 use neutral `quota`. Only verified legacy responses with `used`, `monthlyLimit`,
-and `billingPeriodEnd` default to `monthly`. Currency wrappers are integer cents
-and are kept only as whitelisted diagnostic metadata.
+and `billingPeriodEnd` default to `monthly`. After a period reset the proxy may
+omit `creditUsagePercent` until the account spends; that is mapped as 0% when
+`currentPeriod` is present, not as an invalid response. Currency wrappers are
+integer cents and are kept only as whitelisted diagnostic metadata.
 
 ## Subscription Metadata
 

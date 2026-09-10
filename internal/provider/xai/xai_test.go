@@ -158,6 +158,39 @@ func TestLegacyMonthlyRequiresBillingPeriodEnd(t *testing.T) {
 	}
 }
 
+func TestMapBillingTreatsOmittedPercentAfterPeriodResetAsZero(t *testing.T) {
+	payload := billingResponse{Config: &billingConfig{
+		CurrentPeriod: &usagePeriod{
+			Type:  "USAGE_PERIOD_TYPE_WEEKLY",
+			Start: "2026-09-09T13:43:29Z",
+			End:   "2026-09-16T13:43:29Z",
+		},
+		IsUnifiedBillingUser: boolPtr(true),
+		OnDemandCap:          money(0),
+		OnDemandUsed:         money(0),
+		PrepaidBalance:       money(0),
+	}}
+	snap, err := mapBilling(payload, usageprovider.Account{ID: "xai-default"}, time.Date(2026, 9, 10, 6, 20, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("mapBilling() error = %v", err)
+	}
+	got := snap.Windows[0]
+	if got.Name != "weekly" || got.UsedPercent != 0 {
+		t.Fatalf("window = %#v", got)
+	}
+	if got.ResetAt == nil || got.ResetAt.UTC().Format(time.RFC3339) != "2026-09-16T13:43:29Z" {
+		t.Fatalf("reset = %v", got.ResetAt)
+	}
+}
+
+func TestMapBillingStillRequiresQuotaWithoutPeriodOrPercent(t *testing.T) {
+	_, err := mapBilling(billingResponse{Config: &billingConfig{IsUnifiedBillingUser: boolPtr(true)}}, usageprovider.Account{}, time.Now())
+	var providerErr *usageprovider.Error
+	if !errors.As(err, &providerErr) || providerErr.Code != usageprovider.ErrInvalidResponse {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestWindowDurationIsBoundedBeforeIntConversion(t *testing.T) {
 	used := 10.0
 	payload := billingResponse{Config: &billingConfig{
@@ -569,6 +602,8 @@ func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error)
 }
 
 func money(value int64) *moneyValue { return &moneyValue{Val: &value} }
+
+func boolPtr(value bool) *bool { return &value }
 
 func writeAuth(t *testing.T, value map[string]any) string {
 	t.Helper()
