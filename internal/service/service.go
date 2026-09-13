@@ -41,6 +41,10 @@ func DefaultSpec(binaryPath, configPath string) (Spec, error) {
 			return Spec{}, fmt.Errorf("resolve executable path: %w", err)
 		}
 	}
+	binaryPath, err = AbsolutePath(binaryPath)
+	if err != nil {
+		return Spec{}, err
+	}
 	return Spec{
 		Label:        DefaultLabel,
 		BinaryPath:   binaryPath,
@@ -48,6 +52,26 @@ func DefaultSpec(binaryPath, configPath string) (Spec, error) {
 		LogPath:      config.DefaultLogPath(),
 		DatabasePath: config.DefaultDatabasePath(),
 	}, nil
+}
+
+// AbsolutePath canonicalizes a binary path so service units never embed a
+// relative path. launchd and systemd start services with their own working
+// directory, where a relative path would not resolve.
+func AbsolutePath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve binary path: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err == nil {
+		return resolved, nil
+	}
+	// EvalSymlinks fails when the binary does not exist yet; keep the
+	// absolute path and let the service layer report the missing file.
+	if _, statErr := os.Lstat(absolute); statErr == nil {
+		return "", fmt.Errorf("resolve binary symlinks: %w", err)
+	}
+	return absolute, nil
 }
 
 func Install(ctx context.Context, spec Spec) error {

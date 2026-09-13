@@ -1,6 +1,8 @@
 package service
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -58,5 +60,48 @@ func TestLaunchAgentPlistEscapesXML(t *testing.T) {
 func TestLaunchAgentPlistRequiresBinaryPath(t *testing.T) {
 	if _, err := LaunchAgentPlist(Spec{}); err == nil {
 		t.Fatal("LaunchAgentPlist() error = nil, want error")
+	}
+}
+
+func TestAbsolutePathCanonicalizesRelativePathsAndSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	// Binaries often live behind a symlinked parent, e.g. a "bin" dir
+	// under a symlinked home. The symlink must resolve to the real
+	// target so the service unit stays valid.
+	if err := os.Symlink(filepath.Join(dir, "bin"), filepath.Join(dir, "link-to-bin")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(dir, "bin", "token-burn")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := AbsolutePath(filepath.Join(dir, "link-to-bin", "token-burn"))
+	if err != nil {
+		t.Fatalf("AbsolutePath() error = %v", err)
+	}
+	if !filepath.IsAbs(resolved) {
+		t.Fatalf("AbsolutePath() = %q, want absolute", resolved)
+	}
+	// macOS prefixes such as /var/folders are themselves symlinks, so
+	// compare against the fully resolved target instead of the literal
+	// path this test constructed.
+	want, err := filepath.EvalSymlinks(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != want {
+		t.Fatalf("AbsolutePath() = %q, want symlink-resolved %q", resolved, want)
+	}
+
+	missing, err := AbsolutePath(filepath.Join(dir, "missing", "token-burn"))
+	if err != nil {
+		t.Fatalf("AbsolutePath(missing) error = %v", err)
+	}
+	if !filepath.IsAbs(missing) {
+		t.Fatalf("AbsolutePath(missing) = %q, want absolute", missing)
 	}
 }
