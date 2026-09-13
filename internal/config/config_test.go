@@ -87,11 +87,11 @@ func TestLoadMissingConfigReturnsDefaults(t *testing.T) {
 	if cfg.DatabasePath != DefaultDatabasePath() {
 		t.Fatalf("DatabasePath = %q, want %q", cfg.DatabasePath, DefaultDatabasePath())
 	}
-	if len(cfg.Accounts) != 5 {
-		t.Fatalf("default account count = %d, want 5", len(cfg.Accounts))
+	if len(cfg.Accounts) != 6 {
+		t.Fatalf("default account count = %d, want 6", len(cfg.Accounts))
 	}
-	if cfg.Accounts[0].Provider != "codex" || cfg.Accounts[1].Provider != "claude" || cfg.Accounts[2].Provider != "copilot" || cfg.Accounts[3].Provider != "antigravity" || cfg.Accounts[4].Provider != "xai" {
-		t.Fatalf("default accounts = %#v, want codex, claude, copilot, antigravity, and xai", cfg.Accounts)
+	if cfg.Accounts[0].Provider != "codex" || cfg.Accounts[1].Provider != "claude" || cfg.Accounts[2].Provider != "copilot" || cfg.Accounts[3].Provider != "antigravity" || cfg.Accounts[4].Provider != "xai" || cfg.Accounts[5].Provider != "zai" {
+		t.Fatalf("default accounts = %#v, want codex, claude, copilot, antigravity, xai, and zai", cfg.Accounts)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("default config was not written: %v", err)
@@ -102,6 +102,9 @@ func TestLoadMissingConfigReturnsDefaults(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "provider = \"xai\"") {
 		t.Fatalf("default config missing xai account: %s", data)
+	}
+	if !strings.Contains(string(data), "provider = \"zai\"") {
+		t.Fatalf("default config missing zai account: %s", data)
 	}
 }
 

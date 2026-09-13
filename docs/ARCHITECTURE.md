@@ -185,6 +185,10 @@ id = "antigravity-default"
 [[accounts]]
 provider = "xai"
 id = "xai-default"
+
+[[accounts]]
+provider = "zai"
+id = "zai-default"
 ```
 
 ## Data Flow Details

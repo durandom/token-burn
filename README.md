@@ -1,7 +1,7 @@
 # token-burn
 
 Live AI coding subscription quota monitor for Codex/OpenAI, Claude Code,
-GitHub Copilot, Google Antigravity, and xAI/Grok.
+GitHub Copilot, Google Antigravity, xAI/Grok, and Z.AI (GLM Coding Plan).
 
 `token-burn` is a small local daemon, CLI, and terminal dashboard for watching
 real provider-reported quota usage, reset times, burn rate, and forecasted
@@ -30,6 +30,8 @@ other machines.
   Google Cloud Code usage endpoints
 - xAI/Grok subscription usage via Pi's xAI OAuth session and the experimental,
   undocumented Grok CLI billing endpoint
+- Z.AI GLM Coding Plan usage via Pi's saved Z.AI API key and the
+  community-reverse-engineered monitor quota endpoint
 
 These endpoints and credential files are not stable public APIs. Expect sharp
 edges and occasional breakage.
@@ -37,7 +39,7 @@ edges and occasional breakage.
 ## What It Does
 
 - Monitors live Codex/OpenAI, Claude Code, GitHub Copilot, Google Antigravity,
-  and xAI/Grok subscription quota usage.
+  xAI/Grok, and Z.AI subscription quota usage.
 - Polls provider usage APIs on a gentle interval, defaulting to five minutes.
 - Stores every observed quota window in local SQLite for history.
 - Shows current quota state in a fast terminal UI dashboard.
@@ -49,8 +51,8 @@ edges and occasional breakage.
 
 ## Use Cases
 
-- See whether a Codex, Claude Code, GitHub Copilot, Google Antigravity, or
-  xAI/Grok subscription will hit a usage limit before its reset time.
+- See whether a Codex, Claude Code, GitHub Copilot, Google Antigravity,
+  xAI/Grok, or Z.AI subscription will hit a usage limit before its reset time.
 - Track quota usage from all machines on the same provider account, not just the
   current workstation.
 - Export AI coding subscription usage metrics into OpenTelemetry, OpenObserve,
@@ -365,6 +367,10 @@ id = "antigravity-default"
 [[accounts]]
 provider = "xai"
 id = "xai-default"
+
+[[accounts]]
+provider = "zai"
+id = "zai-default"
 ```
 
 ## Authentication
@@ -406,6 +412,12 @@ subscription**). Credentials are read from configured `auth_file`, then
 xAI API billing is separate from Grok subscription quota. When needed,
 `token-burn` refreshes Pi's OAuth entry and updates `auth.json` under Pi's shared
 lock while preserving all other entries.
+
+Z.AI requires the API key Pi saves from `/login zai` (type `api_key`). The
+global key (`zai` account) targets `api.z.ai`; use the `zai-coding-cn` provider
+for a China-region key (`open.bigmodel.cn`). Keys are not interchangeable
+between regions. `token-burn` only reads the key; it never writes to Pi's
+`auth.json` for this provider.
 
 Secrets are treated as secrets. Authorization headers and obvious token/cookie
 fields are redacted from diagnostics. Pi's per-request/session token counters
@@ -456,6 +468,7 @@ internal/provider/claude live Claude usage client
 internal/provider/copilot live GitHub Copilot usage client
 internal/provider/antigravity live Google Antigravity usage client
 internal/provider/xai/  experimental live Grok subscription usage client
+internal/provider/zai/  live Z.AI GLM Coding Plan usage client
 internal/piauth/         shared read/refresh-safe Pi auth.json access
 internal/store/          SQLite schema and queries
 internal/forecast/       burn-rate and reset projection logic

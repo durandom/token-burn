@@ -22,6 +22,9 @@ type OAuthCredential struct {
 	Expires       int64  `json:"expires"`
 	AccountID     string `json:"accountId,omitempty"`
 	EnterpriseURL string `json:"enterpriseUrl,omitempty"`
+	// Key holds static API-key credentials (type "api_key"); OAuth
+	// providers leave it empty. It is read-only here: Pi owns the value.
+	Key string `json:"key,omitempty"`
 }
 
 type Store struct {

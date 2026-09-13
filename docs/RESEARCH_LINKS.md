@@ -90,6 +90,25 @@ libraries. `token-burn` does not import OpenUsage internals.
 - Codex and Kimi limits checker gist:
   https://gist.github.com/ayagmar/6f2338af41c696ba74a6f130b4f569b0
 
+## Z.AI / GLM Coding Plan
+
+- Z.AI devpack FAQ, weekly quota resets on a 7-day cycle anchored to order
+  time: https://docs.z.ai/devpack/faq
+- OpenUsage Z.AI provider docs; region split (`api.z.ai` vs
+  `open.bigmodel.cn`), monitor vs coding bases, and the five-endpoint poll
+  surface: https://openusage.sh/docs/providers/zai/
+- tokn-provider-zai quota client; `GET /api/monitor/usage/quota/limit` wire
+  notes, raw (no `Bearer`) key header confirmed against the official dashboard
+  XHR, and the `(unit=3, number=5)` / `(unit=6, number=1)` bucket mapping:
+  https://github.com/agentic-rs/tokn (see
+  https://docs.rs/tokn-provider-zai/latest/tokn_provider_zai/quota/)
+- zai-quota Python CLI, community quota endpoint reference:
+  https://github.com/SeeYangZhi/zai-quota
+- cc-switch discussion with the CN endpoint and header notes:
+  https://github.com/farion1231/cc-switch/discussions/1038
+- Pi Z.AI provider (API-key auth, `zai` / `zai-coding-cn` ids and base URLs):
+  https://github.com/earendil-works/pi/blob/main/packages/ai/src/providers/zai.ts
+
 ## Libraries
 
 - OpenTelemetry Go exporters:

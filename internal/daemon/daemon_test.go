@@ -11,6 +11,7 @@ import (
 	"github.com/durandom/token-burn/internal/config"
 	"github.com/durandom/token-burn/internal/otel"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
+	"github.com/durandom/token-burn/internal/provider/zai"
 	"github.com/durandom/token-burn/internal/store"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -19,6 +20,35 @@ func TestOptionsProviderForXAI(t *testing.T) {
 	provider, ok := (Options{}).providerFor("xai")
 	if !ok || provider.ID() != "xai" {
 		t.Fatalf("providerFor(xai) = %#v, %t", provider, ok)
+	}
+}
+
+func TestOptionsProviderForZAI(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantID      string
+		wantBaseURL string
+	}{
+		// New() leaves the global BaseURL empty; the host is resolved at
+		// request time.
+		{"global", "zai", "zai", ""},
+		{"china", "zai-coding-cn", "zai-coding-cn", "https://open.bigmodel.cn"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, ok := (Options{}).providerFor(tt.input)
+			if !ok || provider.ID() != tt.wantID {
+				t.Fatalf("providerFor(%s) = %#v, %t", tt.input, provider, ok)
+			}
+			z, ok := provider.(*zai.Provider)
+			if !ok {
+				t.Fatalf("providerFor(%s) returned %T", tt.input, provider)
+			}
+			if z.BaseURL != tt.wantBaseURL {
+				t.Fatalf("providerFor(%s) baseURL = %q, want %q", tt.input, z.BaseURL, tt.wantBaseURL)
+			}
+		})
 	}
 }
 

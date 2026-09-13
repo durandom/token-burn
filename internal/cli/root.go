@@ -25,6 +25,7 @@ import (
 	"github.com/durandom/token-burn/internal/provider/codex"
 	"github.com/durandom/token-burn/internal/provider/copilot"
 	"github.com/durandom/token-burn/internal/provider/xai"
+	"github.com/durandom/token-burn/internal/provider/zai"
 	"github.com/durandom/token-burn/internal/service"
 	"github.com/durandom/token-burn/internal/store"
 	tokenburntui "github.com/durandom/token-burn/internal/tui"
@@ -844,6 +845,10 @@ func providerFor(name string) (usageprovider.Provider, bool) {
 		return antigravity.New(), true
 	case "xai", "grok":
 		return xai.New(), true
+	case "zai":
+		return zai.New(), true
+	case "zai-coding-cn", "zhipuai", "zai-cn":
+		return zai.NewCN(), true
 	default:
 		return nil, false
 	}

@@ -417,6 +417,83 @@ omit `creditUsagePercent` until the account spends; that is mapped as 0% when
 `currentPeriod` is present, not as an invalid response. Currency wrappers are
 integer cents and are kept only as whitelisted diagnostic metadata.
 
+## Z.AI (GLM Coding Plan)
+
+### Endpoints
+
+```text
+GET https://api.z.ai/api/monitor/usage/quota/limit        # global region
+GET https://open.bigmodel.cn/api/monitor/usage/quota/limit # China region
+```
+
+This monitor endpoint is undocumented and community reverse-engineered (it is
+the same call the Z.AI console dashboard makes). Contract changes may break
+this provider without notice. The `zai` provider id targets the global region
+and Pi's `zai` credential; the `zai-coding-cn` provider id (aliases `zhipuai`,
+`zai-cn`) targets `open.bigmodel.cn` and Pi's `zai-coding-cn` credential. The
+regional keys are not interchangeable.
+
+### Headers
+
+```text
+Authorization: <pi_zai_api_key> # raw key, no Bearer prefix
+Accept: application/json
+```
+
+The dashboard XHR sends the raw key without a `Bearer` prefix; the endpoint
+also accepts `Bearer`. `token-burn` sends the raw form. Redirects are rejected
+and response bodies are bounded to 64 KiB.
+
+### Credential Source
+
+- configured `auth_file`
+- `${PI_CODING_AGENT_DIR}/auth.json`
+- `~/.pi/agent/auth.json`
+
+Only Pi's `zai` (or `zai-coding-cn`) credential with `type = "api_key"` and a
+non-empty `key` is accepted. Run `/login zai` in Pi to save the key.
+`token-burn` never writes to Pi's `auth.json` for this provider; API keys do
+not refresh.
+
+### Response Shape
+
+Observed current shape (undocumented; unknown fields are tolerated):
+
+```json
+{
+  "code": 200,
+  "msg": "Operation successful",
+  "success": true,
+  "data": {
+    "level": "lite",
+    "limits": [
+      {"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":2000,"currentValue":3,"remaining":1996,"percentage":1,"nextResetTime":1789339283092},
+      {"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":10000,"currentValue":3,"remaining":9996,"percentage":1,"nextResetTime":1789925840983}
+    ]
+  }
+}
+```
+
+- `(unit=3, number=5)` is the rolling 5-hour window; `(unit=6, number=1)` is
+  the weekly window. Z.AI anchors these to subscription start, so
+  `nextResetTime` (unix milliseconds) is the authoritative reset instant.
+- Older deployments report token buckets as `type: "TOKENS_LIMIT"` with
+  `percentage` and `total`; newer deployments report credit buckets as
+  `type: "CREDIT_LIMIT"` with a credit cap (`usage`), consumed credits
+  (`currentValue`), and `remaining`. Both are supported.
+- `CREDIT_LIMIT` `percentage` values are rounded up to integers
+  (`3/2000` reports as `1`). When the cap and consumed credits are present,
+  `token-burn` computes the exact ratio instead and keeps the reported value
+  only as diagnostic metadata.
+- `type: "TIME_LIMIT"` is the monthly MCP-tool bucket and is surfaced as an
+  additional `mcp_monthly` window when present.
+- `data.level` becomes the plan label (`lite`, `pro`, ...). `success: false`
+  means no active coding package and is reported as an invalid response, not
+  as empty usage.
+- Per-bucket diagnostics (type, unit, credit cap/used/remaining, reported
+  percentage, reset time) are stored as raw metadata. The API key itself is
+  never stored.
+
 ## Subscription Metadata
 
 `token-burn` only records plan labels that are present in provider-owned live
@@ -430,6 +507,8 @@ responses or vendor-owned local state:
 - Google Antigravity exposes a verified subscription label (`paidTier.name`,
   e.g. `Google AI Pro`) through `loadCodeAssist`.
 - xAI/Grok exposes `subscriptionTier` when present in its experimental billing
+  response.
+- Z.AI exposes `data.level` (`lite`, `pro`, ...) from the monitor quota
   response.
 
 ## Google Antigravity
