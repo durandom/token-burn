@@ -75,13 +75,13 @@ type Account struct {
 }
 
 type fileConfig struct {
-	PollInterval string       `toml:"poll_interval"`
-	HTTPTimeout  string       `toml:"http_timeout"`
-	DatabasePath string       `toml:"database_path"`
-	OTel         fileOTel     `toml:"otel"`
-	TUI          fileTUI      `toml:"tui"`
-	Service      fileService  `toml:"service"`
-	Accounts     []Account    `toml:"accounts"`
+	PollInterval string      `toml:"poll_interval"`
+	HTTPTimeout  string      `toml:"http_timeout"`
+	DatabasePath string      `toml:"database_path"`
+	OTel         fileOTel    `toml:"otel"`
+	TUI          fileTUI     `toml:"tui"`
+	Service      fileService `toml:"service"`
+	Accounts     []Account   `toml:"accounts"`
 }
 
 type fileService struct {
