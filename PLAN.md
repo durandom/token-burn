@@ -1,7 +1,8 @@
 # PLAN.md — Claude-Keychain-Fallback + AGY-Refresh-Credentials
 
-Stand: 2026-09-15. Umsetzung noch nicht begonnen. Zwei getrennte
-Arbeitspakete, unabhängig voneinander umsetzbar.
+Stand: 2026-09-15. **Umgesetzt und live verifiziert am 2026-09-15**
+(beide Pakete; poll_runs zeigt claude + antigravity success ab 08:40 UTC,
+davor error). Release noch offen.
 
 Hintergrund (Diagnose vom 2026-09-15):
 
