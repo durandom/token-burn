@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,11 +44,75 @@ func (p *Provider) ID() string {
 
 func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usageprovider.Snapshot, error) {
 	observedAt := p.now()
-	cred, err := p.resolveCredential(acct)
-	if err != nil {
-		return usageprovider.Snapshot{}, err
+
+	creds := p.collectCredentials(acct)
+	if len(creds) == 0 {
+		// No environment token and no readable file: the keychain is the only
+		// remaining source.
+		cred, ok := p.keychainCredential()
+		if !ok {
+			return usageprovider.Snapshot{}, &usageprovider.Error{
+				Code:     usageprovider.ErrAuthMissing,
+				Provider: id,
+				Err:      errors.New("claude oauth credentials not found; run claude login"),
+			}
+		}
+		creds = []credential{cred}
 	}
 
+	var lastErr error
+	var tried []string
+	for _, cred := range creds {
+		payload, err := p.fetchWithCredential(ctx, cred, observedAt)
+		if err == nil {
+			return mapUsageResponse(payload, acct, observedAt), nil
+		}
+		if !isAuthExpired(err) {
+			// Rate limits, outages and malformed responses describe the
+			// endpoint, not this particular login; another source would run
+			// into the same wall, and the daemon needs the backoff signal.
+			return usageprovider.Snapshot{}, err
+		}
+		lastErr = err
+		tried = append(tried, describeSource(cred))
+	}
+
+	// Every file login is dead. The keychain may hold a newer login that a
+	// running Claude Code keeps rotating - the stale-file shadowing problem.
+	// It is consulted only now, so the happy path never pays for a keychain
+	// read, and never for an explicit CLAUDE_CODE_OAUTH_TOKEN override.
+	if creds[0].source.kind != sourceEnv {
+		if cred, ok := p.keychainCredential(); ok {
+			payload, err := p.fetchWithCredential(ctx, cred, observedAt)
+			if err == nil {
+				return mapUsageResponse(payload, acct, observedAt), nil
+			}
+			if !isAuthExpired(err) {
+				return usageprovider.Snapshot{}, err
+			}
+			lastErr = err
+			tried = append(tried, describeSource(cred))
+		}
+	}
+
+	status := 0
+	var perr *usageprovider.Error
+	if errors.As(lastErr, &perr) {
+		status = perr.HTTPStatus
+	}
+	return usageprovider.Snapshot{}, &usageprovider.Error{
+		Code:       usageprovider.ErrAuthExpired,
+		Provider:   id,
+		HTTPStatus: status,
+		Err:        fmt.Errorf("claude login is expired in every source (%s): %w", strings.Join(tried, ", "), lastErr),
+	}
+}
+
+// fetchWithCredential runs one login through the usage endpoint, refreshing
+// it when due. The raw error is returned so the caller can decide whether the
+// failure disqualifies only this credential (auth expired) or the whole poll
+// (rate limit, outage, malformed response).
+func (p *Provider) fetchWithCredential(ctx context.Context, cred credential, observedAt time.Time) (usageResponse, error) {
 	// Refresh ahead of expiry when the stored login says it is due. Claude Code
 	// normally keeps its own token fresh, so this only matters while it sits
 	// idle - which is exactly when an unattended monitor would otherwise go
@@ -65,7 +130,7 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 			// auth_expired for what may well be a rate limit or an outage,
 			// which sends the user to re-login for no reason and denies the
 			// daemon the backoff signal it needs.
-			return usageprovider.Snapshot{}, refreshErr
+			return usageResponse{}, refreshErr
 		}
 		// Otherwise the token is inside the refresh skew but still valid, so
 		// the current one is good for this poll.
@@ -79,11 +144,7 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 			payload, err = p.fetchUsage(ctx, cred.Access)
 		}
 	}
-	if err != nil {
-		return usageprovider.Snapshot{}, err
-	}
-
-	return mapUsageResponse(payload, acct, observedAt), nil
+	return payload, err
 }
 
 func (p *Provider) fetchUsage(ctx context.Context, token string) (usageResponse, error) {
@@ -149,56 +210,65 @@ func isAuthExpired(err error) bool {
 	return errors.As(err, &perr) && perr.Code == usageprovider.ErrAuthExpired
 }
 
-// resolveCredential returns the first usable Claude login, preferring an
-// explicit environment token, then the credentials file, then the macOS
-// Keychain.
-func (p *Provider) resolveCredential(acct usageprovider.Account) (credential, error) {
+// collectCredentials gathers the Claude logins token-burn should try, in
+// order. CLAUDE_CODE_OAUTH_TOKEN is an explicit override and short-circuits
+// every other source. Otherwise every readable credentials file is returned,
+// freshest expiry first, so a live login outranks a stale copy of it. The
+// macOS Keychain is not part of this list: it is consulted lazily by Fetch
+// once the file logins are exhausted, because reading it spawns a helper
+// process that the happy path should not pay for.
+func (p *Provider) collectCredentials(acct usageprovider.Account) []credential {
 	if token := strings.TrimSpace(p.env("CLAUDE_CODE_OAUTH_TOKEN")); token != "" {
-		return credential{Access: token, source: credentialSource{kind: sourceEnv}}, nil
+		return []credential{{Access: token, source: credentialSource{kind: sourceEnv}}}
 	}
+	var creds []credential
 	for _, path := range p.credentialCandidates(acct) {
 		data, err := os.ReadFile(path)
-		if errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			// A missing or unreadable source is skipped, not fatal: another
+			// source may hold the working login.
 			continue
 		}
-		if err != nil {
-			return credential{}, fmt.Errorf("claude read credentials file %s: %w", path, err)
-		}
 		cred, ok, err := credentialFromJSON(data)
-		if err != nil {
-			return credential{}, &usageprovider.Error{
-				Code:     usageprovider.ErrInvalidResponse,
-				Provider: id,
-				Err:      fmt.Errorf("parse claude credentials file %s: %w", path, err),
-			}
+		if err != nil || !ok || !cred.hasAccess() {
+			continue
 		}
-		if ok {
-			cred.source = credentialSource{kind: sourceFile, path: path}
-			return cred, nil
-		}
+		cred.source = credentialSource{kind: sourceFile, path: path}
+		creds = append(creds, cred)
 	}
+	sort.SliceStable(creds, func(i, j int) bool {
+		return creds[i].ExpiresAt > creds[j].ExpiresAt
+	})
+	return creds
+}
 
+// keychainCredential reads and decodes the macOS Keychain login. Any failure
+// means "no candidate from this source", never a fatal poll error.
+func (p *Provider) keychainCredential() (credential, bool) {
 	secret, err := p.keychainSecret()
 	if err != nil {
-		return credential{}, err
+		return credential{}, false
 	}
 	cred, ok, err := credentialFromSecret(secret)
-	if err != nil {
-		return credential{}, &usageprovider.Error{
-			Code:     usageprovider.ErrInvalidResponse,
-			Provider: id,
-			Err:      errors.New("parse claude credentials from macOS Keychain"),
-		}
+	if err != nil || !ok || !cred.hasAccess() {
+		return credential{}, false
 	}
-	if ok {
-		cred.source = credentialSource{kind: sourceKeychain}
-		return cred, nil
-	}
+	cred.source = credentialSource{kind: sourceKeychain}
+	return cred, true
+}
 
-	return credential{}, &usageprovider.Error{
-		Code:     usageprovider.ErrAuthMissing,
-		Provider: id,
-		Err:      errors.New("claude oauth credentials not found; run claude login"),
+// describeSource names a credential's origin for diagnostics. It deliberately
+// reports no token material.
+func describeSource(cred credential) string {
+	switch cred.source.kind {
+	case sourceEnv:
+		return "env CLAUDE_CODE_OAUTH_TOKEN"
+	case sourceFile:
+		return "file " + cred.source.path
+	case sourceKeychain:
+		return "macOS keychain"
+	default:
+		return "unknown source"
 	}
 }
 

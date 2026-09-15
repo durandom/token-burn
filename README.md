@@ -23,7 +23,9 @@ other machines.
 - Codex / ChatGPT subscription usage via
   `https://chatgpt.com/backend-api/wham/usage`
 - Claude Code subscription usage via
-  `https://api.anthropic.com/api/oauth/usage`
+  `https://api.anthropic.com/api/oauth/usage`, reading credentials files and
+  the macOS Keychain with per-source fallback, so one stale login can no
+  longer shadow a healthy one
 - GitHub Copilot quota and AI Credits usage via the logged-in GitHub CLI:
   `gh api /copilot_internal/user` and GitHub billing usage endpoints
 - Google Antigravity model quota usage via existing Antigravity OAuth state and

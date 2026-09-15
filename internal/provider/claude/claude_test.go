@@ -327,7 +327,8 @@ func TestFetchAuthErrorsAreTyped(t *testing.T) {
 				HomeDir: func() (string, error) {
 					return t.TempDir(), nil
 				},
-				Env: func(string) string { return "" },
+				Env:           func(string) string { return "" },
+				KeychainToken: func() (string, error) { return "", nil },
 			}).Fetch(context.Background(), usageprovider.Account{
 				ID:              "claude-default",
 				CredentialsFile: credPath,

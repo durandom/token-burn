@@ -181,6 +181,16 @@ gelegentlicher 400 beim exakten Gleichzeitigkeitsfall bleibt möglich
 5. Commit(s) getrennt je Arbeitspaket; Version-Bump/Release separat,
    wenn beide verifiziert sind.
 
+## Umsetzungs-Abweichungen (2026-09-15)
+
+- **B1 Sortierung**: Nur die Datei-Kandidaten werden nach `expiresAt`
+  absteigend sortiert; die Keychain wird **lazy** erst nach Erschöpfung
+  aller Datei-Logins gelesen (statt vorab mitzusortieren). Grund: Der
+  Happy Path soll keinen `security`-Subprozess starten und kein
+  Keychain-Prompt riskieren; das Schatten-Problem (tote Datei blockiert
+  frische Keychain) bleibt genauso gelöst. `CLAUDE_CODE_OAUTH_TOKEN`
+  bleibt wie geplant ein harter Short-Circuit ohne Fallback.
+
 ## Explizit nicht Teil dieses Plans
 
 - Runtime-Discovery der Credentials aus `Antigravity.app`/`agy`-Binary

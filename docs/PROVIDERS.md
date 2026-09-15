@@ -116,12 +116,38 @@ User-Agent: token-burn
 
 ### Credential Sources
 
-Probed in order:
+Collected and evaluated as candidates:
 
-1. `CLAUDE_CODE_OAUTH_TOKEN`
+1. `CLAUDE_CODE_OAUTH_TOKEN` — an explicit override that short-circuits
+   every other source; when it is rejected, the poll fails instead of
+   silently switching to the regular sources
 2. configured credentials file
 3. `~/.claude/.credentials.json`
 4. macOS Keychain entry `Claude Code-credentials`
+
+The file logins are tried freshest `expiresAt` first, so a live login
+outranks a stale copy of it in another file. A login is only skipped when
+it is actually rejected — an expired access token whose refresh succeeds,
+or a valid access token, wins its poll. When every file login is dead, the
+Keychain is consulted last: it may hold a newer login that a running
+Claude Code keeps rotating, which is exactly the setup where a stale
+`~/.claude/.credentials.json` used to shadow it. Reading the Keychain is
+lazy for the same reason: the happy path should not spawn `security` or
+risk a keychain prompt on every poll.
+
+Only auth failures disqualify a single credential. Rate limits, outages
+and malformed responses describe the endpoint, so they fail the whole poll
+(the daemon needs those backoff signals) instead of rotating through every
+stored login. When all sources are expired, the error names every source
+that was tried, without token material. Unreadable or unparsable sources
+are skipped; if nothing is readable at all, the poll reports
+`auth_missing`.
+
+A known residual race: Anthropic rotates the refresh token on every
+exchange, and a running Claude Code session competes for the same Keychain
+login. Each side re-reads the current login before refreshing, so the
+window is small, but an exact-simultaneous refresh can leave one side with
+a 400 `invalid_grant` for one poll. The next poll re-reads and recovers.
 
 The stored credential is a JSON container whose Claude login lives under
 `claudeAiOauth`:
