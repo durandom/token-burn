@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -24,12 +26,26 @@ type Config struct {
 	DatabasePath string
 	OTel         OTelConfig
 	TUI          TUIConfig
+	Service      ServiceConfig
 	Accounts     []Account
 }
 
 type TUIConfig struct {
 	Theme string
 }
+
+// ServiceConfig configures the installed user service. Env entries are
+// copied verbatim into the service unit's environment (launchd
+// EnvironmentVariables / systemd Environment=). They are the intended way
+// to hand provider secrets such as TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID
+// to the daemon without putting them on the user's global environment.
+type ServiceConfig struct {
+	Env map[string]string
+}
+
+// envKeyPattern constrains service.env keys to UPPER_SNAKE_CASE identifiers.
+// It keeps users from injecting malformed assignments into service units.
+var envKeyPattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 type OTelConfig struct {
 	Enabled        bool
@@ -59,12 +75,17 @@ type Account struct {
 }
 
 type fileConfig struct {
-	PollInterval string    `toml:"poll_interval"`
-	HTTPTimeout  string    `toml:"http_timeout"`
-	DatabasePath string    `toml:"database_path"`
-	OTel         fileOTel  `toml:"otel"`
-	TUI          fileTUI   `toml:"tui"`
-	Accounts     []Account `toml:"accounts"`
+	PollInterval string       `toml:"poll_interval"`
+	HTTPTimeout  string       `toml:"http_timeout"`
+	DatabasePath string       `toml:"database_path"`
+	OTel         fileOTel     `toml:"otel"`
+	TUI          fileTUI      `toml:"tui"`
+	Service      fileService  `toml:"service"`
+	Accounts     []Account    `toml:"accounts"`
+}
+
+type fileService struct {
+	Env map[string]string `toml:"env"`
 }
 
 type fileTUI struct {
@@ -220,6 +241,18 @@ func Load(path string) (Config, error) {
 	default:
 		return Config{}, fmt.Errorf("invalid tui.theme %q; want auto, dark, or light", cfg.TUI.Theme)
 	}
+	if len(fc.Service.Env) > 0 {
+		cfg.Service.Env = make(map[string]string, len(fc.Service.Env))
+		for key, value := range fc.Service.Env {
+			if !envKeyPattern.MatchString(key) {
+				return Config{}, fmt.Errorf("invalid service.env key %q; want UPPER_SNAKE_CASE", key)
+			}
+			if strings.TrimSpace(value) == "" {
+				return Config{}, fmt.Errorf("service.env %q must not be empty", key)
+			}
+			cfg.Service.Env[key] = value
+		}
+	}
 
 	return cfg, nil
 }
@@ -296,6 +329,14 @@ export_interval = "60s"
 
 [tui]
 theme = "auto"
+
+# [service.env]
+# Extra environment variables copied into the installed service unit
+# (launchd EnvironmentVariables / systemd Environment=). Use this to give
+# the daemon provider credentials that must not live in the global shell
+# environment, e.g. the public Antigravity CLI OAuth client:
+# TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID = "..."
+# TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_SECRET = "..."
 
 [otel.read]
 mode = "sqlite"

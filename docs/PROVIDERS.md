@@ -587,6 +587,46 @@ The refreshed access token is cached at:
 ${XDG_CACHE_HOME:-~/.cache}/token-burn/antigravity-auth.json
 ```
 
+#### Configuring refresh credentials
+
+Google does not publish the Antigravity OAuth client, but it is a public
+CLI client whose ID and secret ship inside every `agy` binary and are
+widely mirrored in community tooling. They are not user credentials.
+
+To extract them from a local `agy` install (values below are yours to
+keep out of commits and logs):
+
+```sh
+strings ~/.local/bin/agy | grep -oE '[0-9]{8,}-[a-z0-9]+\.apps\.googleusercontent\.com'
+strings ~/.local/bin/agy | grep -oE 'GOCSPX-[A-Za-z0-9_-]+'
+```
+
+Two caveats: the binary usually contains more than one client ID — the
+one bound to the login is the `aud` claim of the `id_token` stored next
+to the refresh token — and Go binaries concatenate adjacent string
+constants, so the secret must be cut to its real length (35 `GOCSPX-…`
+characters in current builds) before use. A one-off
+`grant_type=refresh_token` round-trip against
+`https://oauth2.googleapis.com/token` confirms the pair; Google does not
+rotate the vendor refresh token on use.
+
+For the daemon, put the values in the config file so `token-burn install`
+copies them into the service unit environment (launchd
+`EnvironmentVariables`, systemd `Environment=`; the unit file is written
+mode 0600):
+
+```toml
+[service.env]
+TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID = "…"
+TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_SECRET = "…"
+```
+
+Then re-run `token-burn install` and restart the service — a running
+daemon does not pick up changed environment variables. With credentials
+in place, token-burn bridges the gaps in which neither the IDE nor `agy`
+refreshes the shared token file. These endpoints and the embedded client
+are undocumented and may break without notice.
+
 ### Response Shape
 
 Relevant fields from `loadCodeAssist`:

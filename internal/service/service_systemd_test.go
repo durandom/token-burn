@@ -95,3 +95,47 @@ func TestSystemdUnitName(t *testing.T) {
 		t.Fatalf("systemdUnitName(label) = %q, want token-burn.service", got)
 	}
 }
+
+func TestSystemdUnitExtraEnv(t *testing.T) {
+	unit, err := SystemdUnit(Spec{
+		BinaryPath: "/usr/local/bin/token-burn",
+		ExtraEnv: map[string]string{
+			"TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_SECRET": "GOCSPX-secret",
+			"TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID":     "107100-test.apps.googleusercontent.com",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SystemdUnit() error = %v", err)
+	}
+	text := string(unit)
+	idLine := "Environment=\"TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID=107100-test.apps.googleusercontent.com\"\n"
+	secretLine := "Environment=\"TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_SECRET=GOCSPX-secret\"\n"
+	idIdx := strings.Index(text, idLine)
+	secretIdx := strings.Index(text, secretLine)
+	if idIdx < 0 || secretIdx < 0 {
+		t.Fatalf("unit missing extra env lines:\n%s", text)
+	}
+	if idIdx > secretIdx {
+		t.Fatalf("extra env lines not sorted:\n%s", text)
+	}
+}
+
+func TestSystemdUnitExtraEnvQuotesValues(t *testing.T) {
+	unit, err := SystemdUnit(Spec{
+		BinaryPath: "/usr/local/bin/token-burn",
+		ExtraEnv:   map[string]string{"TOKEN_BURN_QUOTED": `a "b" \c`},
+	})
+	if err != nil {
+		t.Fatalf("SystemdUnit() error = %v", err)
+	}
+	want := "Environment=\"TOKEN_BURN_QUOTED=a \\\"b\\\" \\\\c\"\n"
+	if !strings.Contains(string(unit), want) {
+		t.Fatalf("unit missing quoted assignment %q:\n%s", want, unit)
+	}
+}
+
+func TestSystemdUnitRejectsReservedExtraEnv(t *testing.T) {
+	if _, err := SystemdUnit(Spec{BinaryPath: "/usr/local/bin/token-burn", ExtraEnv: map[string]string{"HOME": "/elsewhere"}}); err == nil {
+		t.Fatal("SystemdUnit() with reserved key succeeded, want error")
+	}
+}

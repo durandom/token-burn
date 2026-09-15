@@ -105,3 +105,49 @@ func TestAbsolutePathCanonicalizesRelativePathsAndSymlinks(t *testing.T) {
 		t.Fatalf("AbsolutePath(missing) = %q, want absolute", missing)
 	}
 }
+
+func TestLaunchAgentPlistExtraEnvSorted(t *testing.T) {
+	plist, err := LaunchAgentPlist(Spec{
+		Label:      "dev.durandom.token-burn",
+		BinaryPath: "/usr/local/bin/token-burn",
+		ExtraEnv: map[string]string{
+			"TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_SECRET": "GOCSPX-secret",
+			"TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID":     "107100-test.apps.googleusercontent.com",
+		},
+	})
+	if err != nil {
+		t.Fatalf("LaunchAgentPlist() error = %v", err)
+	}
+	text := string(plist)
+	idIdx := strings.Index(text, "<key>TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID</key>")
+	secretIdx := strings.Index(text, "<key>TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_SECRET</key>")
+	if idIdx < 0 || secretIdx < 0 {
+		t.Fatalf("plist missing extra env keys:\n%s", text)
+	}
+	if idIdx > secretIdx {
+		t.Fatalf("extra env keys not sorted: id at %d after secret at %d", idIdx, secretIdx)
+	}
+	if !strings.Contains(text, "<string>GOCSPX-secret</string>") {
+		t.Fatalf("plist missing extra env value:\n%s", text)
+	}
+	// Extra env must come after the built-in HOME/XDG entries so the
+	// built-ins stay easy to find in diffs.
+	homeIdx := strings.Index(text, "<key>XDG_STATE_HOME</key>")
+	if homeIdx > idIdx || homeIdx > secretIdx {
+		t.Fatalf("extra env keys must follow the built-in environment:\n%s", text)
+	}
+}
+
+func TestLaunchAgentPlistRejectsReservedExtraEnv(t *testing.T) {
+	for _, key := range []string{"PATH", "HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME"} {
+		if _, err := LaunchAgentPlist(Spec{BinaryPath: "/usr/local/bin/token-burn", ExtraEnv: map[string]string{key: "x"}}); err == nil {
+			t.Fatalf("LaunchAgentPlist() with reserved key %q succeeded, want error", key)
+		}
+	}
+}
+
+func TestLaunchAgentPlistRejectsEmptyExtraEnvValue(t *testing.T) {
+	if _, err := LaunchAgentPlist(Spec{BinaryPath: "/usr/local/bin/token-burn", ExtraEnv: map[string]string{"TOKEN_BURN_X": " "}}); err == nil {
+		t.Fatal("LaunchAgentPlist() with blank value succeeded, want error")
+	}
+}

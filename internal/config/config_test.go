@@ -123,3 +123,83 @@ func TestDefaultPathsUseXDG(t *testing.T) {
 		t.Fatalf("DefaultLogPath() = %q, want %q", got, want)
 	}
 }
+
+func TestLoadServiceEnv(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[service.env]
+TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID = "107100-test.apps.googleusercontent.com"
+TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_SECRET = "GOCSPX-test"
+
+[[accounts]]
+provider = "codex"
+id = "codex-default"
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := map[string]string{
+		"TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID":     "107100-test.apps.googleusercontent.com",
+		"TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_SECRET": "GOCSPX-test",
+	}
+	if len(cfg.Service.Env) != len(want) {
+		t.Fatalf("Service.Env = %#v, want %#v", cfg.Service.Env, want)
+	}
+	for key, value := range want {
+		if cfg.Service.Env[key] != value {
+			t.Fatalf("Service.Env[%q] = %q, want %q", key, cfg.Service.Env[key], value)
+		}
+	}
+}
+
+func TestLoadServiceEnvRejectsInvalidKeys(t *testing.T) {
+	for name, key := range map[string]string{
+		"lowercase":     "token_burn_secret",
+		"leading-digit": "9TOKEN",
+		"shell-meta":    "PATH${HOME}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.toml")
+			data := []byte("[service.env]\n" + key + ` = "value"` + "\n")
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatalf("Load() with key %q succeeded, want error", key)
+			}
+		})
+	}
+}
+
+func TestLoadServiceEnvRejectsEmptyValue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("[service.env]\nTOKEN_BURN_X = \"\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() with empty value succeeded, want error")
+	}
+}
+
+func TestLoadWithoutServiceEnvSectionKeepsDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("poll_interval = \"5m\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Service.Env != nil && len(cfg.Service.Env) != 0 {
+		t.Fatalf("Service.Env = %#v, want empty", cfg.Service.Env)
+	}
+}

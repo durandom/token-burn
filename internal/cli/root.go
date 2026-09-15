@@ -357,6 +357,7 @@ func installSpec(binaryPath, configPath string) (service.Spec, error) {
 		return service.Spec{}, err
 	}
 	spec.DatabasePath = cfg.DatabasePath
+	spec.ExtraEnv = cfg.Service.Env
 	return spec, nil
 }
 

@@ -187,3 +187,27 @@ func TestPrintVerboseErrorFlagsRateLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallSpecPassesServiceEnv(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	data := []byte(`
+[service.env]
+TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID = "107100-test.apps.googleusercontent.com"
+
+[[accounts]]
+provider = "codex"
+id = "codex-default"
+`)
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	spec, err := installSpec("/tmp/token-burn", configPath)
+	if err != nil {
+		t.Fatalf("installSpec() error = %v", err)
+	}
+	if spec.ExtraEnv["TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID"] != "107100-test.apps.googleusercontent.com" {
+		t.Fatalf("ExtraEnv = %#v, want antigravity client id", spec.ExtraEnv)
+	}
+}
