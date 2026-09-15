@@ -161,6 +161,12 @@ func installSystemdUnit(ctx context.Context, spec Spec) error {
 	if err := os.WriteFile(path, unit, 0o600); err != nil {
 		return fmt.Errorf("write systemd user unit: %w", err)
 	}
+	// WriteFile only applies the mode at creation; enforce it for units
+	// replaced over an older, possibly world-readable file carrying ExtraEnv
+	// secrets.
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("restrict systemd user unit permissions: %w", err)
+	}
 
 	if err := runSystemctl(ctx, "daemon-reload"); err != nil {
 		return err

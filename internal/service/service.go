@@ -264,6 +264,12 @@ func installLaunchAgent(ctx context.Context, spec Spec) error {
 	if err := os.WriteFile(path, plist, 0600); err != nil {
 		return fmt.Errorf("write LaunchAgent plist: %w", err)
 	}
+	// WriteFile only applies the mode at creation; a plist left over from an
+	// earlier install keeps its old mode, and 0644 would expose ExtraEnv
+	// secrets to other local users.
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("restrict LaunchAgent plist permissions: %w", err)
+	}
 
 	_ = runLaunchctl(ctx, "bootout", launchDomain(), path)
 	if err := runLaunchctl(ctx, "bootstrap", launchDomain(), path); err != nil {
