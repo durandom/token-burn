@@ -593,80 +593,17 @@
             "table_pivot_sticky_col_totals": false,
             "panel_time_enabled": false
           },
-          "queryType": "sql",
+          "queryType": "promql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) as \"x_axis_1\", provider || '/' || account_id || '/' || window as \"breakdown_1\", max(value) as \"y_axis_1\" FROM \"token_burn_usage_used_percent\" WHERE provider <> 'test' GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1 ASC",
+              "query": "token_burn_usage_used_percent{provider!=\"test\"}",
               "fields": {
                 "stream": "token_burn_usage_used_percent",
                 "stream_type": "metrics",
-                "x": [
-                  {
-                    "label": "Timestamp",
-                    "alias": "x_axis_1",
-                    "color": null,
-                    "type": "build",
-                    "functionName": "histogram",
-                    "args": [
-                      {
-                        "type": "field",
-                        "value": {
-                          "field": "_timestamp",
-                          "streamAlias": null
-                        }
-                      },
-                      {
-                        "type": "histogramInterval",
-                        "value": null
-                      }
-                    ],
-                    "sortBy": "ASC",
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": false,
-                    "showFieldAsJson": false
-                  }
-                ],
-                "y": [
-                  {
-                    "label": "Used %",
-                    "alias": "y_axis_1",
-                    "color": null,
-                    "type": "build",
-                    "functionName": "max",
-                    "args": [
-                      {
-                        "type": "field",
-                        "value": {
-                          "field": "value",
-                          "streamAlias": null
-                        }
-                      }
-                    ],
-                    "sortBy": null,
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": true,
-                    "showFieldAsJson": false
-                  }
-                ],
+                "x": [],
+                "y": [],
                 "z": [],
-                "breakdown": [
-                  {
-                    "label": "Window",
-                    "alias": "breakdown_1",
-                    "color": null,
-                    "type": "raw",
-                    "rawQuery": "provider || '/' || account_id || '/' || window",
-                    "functionName": null,
-                    "args": [],
-                    "sortBy": null,
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": true,
-                    "showFieldAsJson": false
-                  }
-                ],
+                "breakdown": [],
                 "filter": {
                   "filterType": "group",
                   "logicalOperator": "AND",
@@ -674,7 +611,7 @@
                 }
               },
               "config": {
-                "promql_legend": "",
+                "promql_legend": "{provider}/{account_id}/{window}",
                 "layer_type": "scatter",
                 "weight_fixed": 1,
                 "limit": 0,
@@ -684,7 +621,7 @@
               },
               "joins": [],
               "vrlFunctionQuery": "",
-              "customQuery": false
+              "customQuery": true
             }
           ],
           "layout": {
@@ -783,80 +720,17 @@
             "table_pivot_sticky_col_totals": false,
             "panel_time_enabled": false
           },
-          "queryType": "sql",
+          "queryType": "promql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) as \"x_axis_1\", provider || '/' || account_id || '/' || window as \"breakdown_1\", max(value) as \"y_axis_1\" FROM \"token_burn_forecast_projected_reset_percent\" WHERE provider <> 'test' GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1 ASC",
+              "query": "token_burn_forecast_projected_reset_percent{provider!=\"test\"}",
               "fields": {
                 "stream": "token_burn_forecast_projected_reset_percent",
                 "stream_type": "metrics",
-                "x": [
-                  {
-                    "label": "Timestamp",
-                    "alias": "x_axis_1",
-                    "color": null,
-                    "type": "build",
-                    "functionName": "histogram",
-                    "args": [
-                      {
-                        "type": "field",
-                        "value": {
-                          "field": "_timestamp",
-                          "streamAlias": null
-                        }
-                      },
-                      {
-                        "type": "histogramInterval",
-                        "value": null
-                      }
-                    ],
-                    "sortBy": "ASC",
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": false,
-                    "showFieldAsJson": false
-                  }
-                ],
-                "y": [
-                  {
-                    "label": "Reset %",
-                    "alias": "y_axis_1",
-                    "color": null,
-                    "type": "build",
-                    "functionName": "max",
-                    "args": [
-                      {
-                        "type": "field",
-                        "value": {
-                          "field": "value",
-                          "streamAlias": null
-                        }
-                      }
-                    ],
-                    "sortBy": null,
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": true,
-                    "showFieldAsJson": false
-                  }
-                ],
+                "x": [],
+                "y": [],
                 "z": [],
-                "breakdown": [
-                  {
-                    "label": "Window",
-                    "alias": "breakdown_1",
-                    "color": null,
-                    "type": "raw",
-                    "rawQuery": "provider || '/' || account_id || '/' || window",
-                    "functionName": null,
-                    "args": [],
-                    "sortBy": null,
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": true,
-                    "showFieldAsJson": false
-                  }
-                ],
+                "breakdown": [],
                 "filter": {
                   "filterType": "group",
                   "logicalOperator": "AND",
@@ -864,7 +738,7 @@
                 }
               },
               "config": {
-                "promql_legend": "",
+                "promql_legend": "{provider}/{account_id}/{window}",
                 "layer_type": "scatter",
                 "weight_fixed": 1,
                 "limit": 0,
@@ -874,7 +748,7 @@
               },
               "joins": [],
               "vrlFunctionQuery": "",
-              "customQuery": false
+              "customQuery": true
             }
           ],
           "layout": {
@@ -1170,80 +1044,17 @@
             "table_pivot_sticky_col_totals": false,
             "panel_time_enabled": false
           },
-          "queryType": "sql",
+          "queryType": "promql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) as \"x_axis_1\", provider || '/' || account_id || '/' || window as \"breakdown_1\", max(value) as \"y_axis_1\" FROM \"token_burn_forecast_burn_rate_percent_per_hour\" WHERE provider <> 'test' GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1 ASC",
+              "query": "token_burn_forecast_burn_rate_percent_per_hour{provider!=\"test\"}",
               "fields": {
                 "stream": "token_burn_forecast_burn_rate_percent_per_hour",
                 "stream_type": "metrics",
-                "x": [
-                  {
-                    "label": "Timestamp",
-                    "alias": "x_axis_1",
-                    "color": null,
-                    "type": "build",
-                    "functionName": "histogram",
-                    "args": [
-                      {
-                        "type": "field",
-                        "value": {
-                          "field": "_timestamp",
-                          "streamAlias": null
-                        }
-                      },
-                      {
-                        "type": "histogramInterval",
-                        "value": null
-                      }
-                    ],
-                    "sortBy": "ASC",
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": false,
-                    "showFieldAsJson": false
-                  }
-                ],
-                "y": [
-                  {
-                    "label": "Percent / Hour",
-                    "alias": "y_axis_1",
-                    "color": null,
-                    "type": "build",
-                    "functionName": "max",
-                    "args": [
-                      {
-                        "type": "field",
-                        "value": {
-                          "field": "value",
-                          "streamAlias": null
-                        }
-                      }
-                    ],
-                    "sortBy": null,
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": true,
-                    "showFieldAsJson": false
-                  }
-                ],
+                "x": [],
+                "y": [],
                 "z": [],
-                "breakdown": [
-                  {
-                    "label": "Window",
-                    "alias": "breakdown_1",
-                    "color": null,
-                    "type": "raw",
-                    "rawQuery": "provider || '/' || account_id || '/' || window",
-                    "functionName": null,
-                    "args": [],
-                    "sortBy": null,
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": true,
-                    "showFieldAsJson": false
-                  }
-                ],
+                "breakdown": [],
                 "filter": {
                   "filterType": "group",
                   "logicalOperator": "AND",
@@ -1251,7 +1062,7 @@
                 }
               },
               "config": {
-                "promql_legend": "",
+                "promql_legend": "{provider}/{account_id}/{window}",
                 "layer_type": "scatter",
                 "weight_fixed": 1,
                 "limit": 0,
@@ -1261,7 +1072,7 @@
               },
               "joins": [],
               "vrlFunctionQuery": "",
-              "customQuery": false
+              "customQuery": true
             }
           ],
           "layout": {
@@ -1360,73 +1171,17 @@
             "table_pivot_sticky_col_totals": false,
             "panel_time_enabled": false
           },
-          "queryType": "sql",
+          "queryType": "promql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) as \"x_axis_1\", provider || '/' || account_id || '/' || window as \"breakdown_1\", max(value / 3600.0) as \"y_axis_1\" FROM \"token_burn_usage_seconds_to_reset\" WHERE provider <> 'test' GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1 ASC",
+              "query": "token_burn_usage_seconds_to_reset{provider!=\"test\"} / 3600",
               "fields": {
                 "stream": "token_burn_usage_seconds_to_reset",
                 "stream_type": "metrics",
-                "x": [
-                  {
-                    "label": "Timestamp",
-                    "alias": "x_axis_1",
-                    "color": null,
-                    "type": "build",
-                    "functionName": "histogram",
-                    "args": [
-                      {
-                        "type": "field",
-                        "value": {
-                          "field": "_timestamp",
-                          "streamAlias": null
-                        }
-                      },
-                      {
-                        "type": "histogramInterval",
-                        "value": null
-                      }
-                    ],
-                    "sortBy": "ASC",
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": false,
-                    "showFieldAsJson": false
-                  }
-                ],
-                "y": [
-                  {
-                    "label": "Hours",
-                    "alias": "y_axis_1",
-                    "color": null,
-                    "type": "raw",
-                    "rawQuery": "max(value / 3600.0)",
-                    "functionName": null,
-                    "args": [],
-                    "sortBy": null,
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": true,
-                    "showFieldAsJson": false
-                  }
-                ],
+                "x": [],
+                "y": [],
                 "z": [],
-                "breakdown": [
-                  {
-                    "label": "Window",
-                    "alias": "breakdown_1",
-                    "color": null,
-                    "type": "raw",
-                    "rawQuery": "provider || '/' || account_id || '/' || window",
-                    "functionName": null,
-                    "args": [],
-                    "sortBy": null,
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": true,
-                    "showFieldAsJson": false
-                  }
-                ],
+                "breakdown": [],
                 "filter": {
                   "filterType": "group",
                   "logicalOperator": "AND",
@@ -1434,7 +1189,7 @@
                 }
               },
               "config": {
-                "promql_legend": "",
+                "promql_legend": "{provider}/{account_id}/{window}",
                 "layer_type": "scatter",
                 "weight_fixed": 1,
                 "limit": 0,
@@ -1444,7 +1199,7 @@
               },
               "joins": [],
               "vrlFunctionQuery": "",
-              "customQuery": false
+              "customQuery": true
             }
           ],
           "layout": {
@@ -1543,80 +1298,17 @@
             "table_pivot_sticky_col_totals": false,
             "panel_time_enabled": false
           },
-          "queryType": "sql",
+          "queryType": "promql",
           "queries": [
             {
-              "query": "SELECT histogram(_timestamp) as \"x_axis_1\", provider || '/' || account_id as \"breakdown_1\", max(value) as \"y_axis_1\" FROM \"token_burn_poll_runs_total\" WHERE provider <> 'test' GROUP BY x_axis_1, breakdown_1 ORDER BY x_axis_1 ASC",
+              "query": "token_burn_poll_runs_total{provider!=\"test\"}",
               "fields": {
                 "stream": "token_burn_poll_runs_total",
                 "stream_type": "metrics",
-                "x": [
-                  {
-                    "label": "Timestamp",
-                    "alias": "x_axis_1",
-                    "color": null,
-                    "type": "build",
-                    "functionName": "histogram",
-                    "args": [
-                      {
-                        "type": "field",
-                        "value": {
-                          "field": "_timestamp",
-                          "streamAlias": null
-                        }
-                      },
-                      {
-                        "type": "histogramInterval",
-                        "value": null
-                      }
-                    ],
-                    "sortBy": "ASC",
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": false,
-                    "showFieldAsJson": false
-                  }
-                ],
-                "y": [
-                  {
-                    "label": "Runs",
-                    "alias": "y_axis_1",
-                    "color": null,
-                    "type": "build",
-                    "functionName": "max",
-                    "args": [
-                      {
-                        "type": "field",
-                        "value": {
-                          "field": "value",
-                          "streamAlias": null
-                        }
-                      }
-                    ],
-                    "sortBy": null,
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": true,
-                    "showFieldAsJson": false
-                  }
-                ],
+                "x": [],
+                "y": [],
                 "z": [],
-                "breakdown": [
-                  {
-                    "label": "Account",
-                    "alias": "breakdown_1",
-                    "color": null,
-                    "type": "raw",
-                    "rawQuery": "provider || '/' || account_id",
-                    "functionName": null,
-                    "args": [],
-                    "sortBy": null,
-                    "isDerived": false,
-                    "havingConditions": [],
-                    "treatAsNonTimestamp": true,
-                    "showFieldAsJson": false
-                  }
-                ],
+                "breakdown": [],
                 "filter": {
                   "filterType": "group",
                   "logicalOperator": "AND",
@@ -1624,7 +1316,7 @@
                 }
               },
               "config": {
-                "promql_legend": "",
+                "promql_legend": "{provider}/{account_id}",
                 "layer_type": "scatter",
                 "weight_fixed": 1,
                 "limit": 0,
@@ -1634,7 +1326,7 @@
               },
               "joins": [],
               "vrlFunctionQuery": "",
-              "customQuery": false
+              "customQuery": true
             }
           ],
           "layout": {
