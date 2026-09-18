@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/durandom/token-burn/internal/config"
+	"github.com/durandom/token-burn/internal/daemon"
 	"github.com/durandom/token-burn/internal/forecast"
 	"github.com/durandom/token-burn/internal/otelread"
 	"github.com/durandom/token-burn/internal/store"
@@ -67,6 +68,8 @@ type refreshMsg struct {
 	daemonState *store.DaemonState
 	dataSource  string
 }
+
+type pollErrorMsg struct{ err error }
 
 type accountPollStatus struct {
 	run            store.PollRun
@@ -134,6 +137,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.loading = true
 			return m, m.refresh()
+		case "p":
+			m.loading = true
+			return m, tea.Batch(requestPoll(m.cfg), m.refresh())
 		}
 	case tickMsg:
 		m.loading = true
@@ -148,6 +154,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastGood = msg.lastGood
 		m.daemonState = msg.daemonState
 		m.dataSource = msg.dataSource
+		return m, nil
+	case pollErrorMsg:
+		m.loading = false
+		m.errors = append(m.errors, msg.err.Error())
 		return m, nil
 	}
 	return m, nil
@@ -176,7 +186,7 @@ func (m Model) View() string {
 		b.WriteString(st.subtle.Render(" · no successful refresh yet"))
 	}
 	b.WriteString("\n")
-	b.WriteString(st.subtle.Render("q quit  r refresh  " + m.sourceLabel(time.Now())))
+	b.WriteString(st.subtle.Render("q quit  r reload  p poll  " + m.sourceLabel(time.Now())))
 	b.WriteString("\n\n")
 
 	if len(m.errors) > 0 {
@@ -236,6 +246,17 @@ func (m Model) View() string {
 	}
 	b.WriteString(usage)
 	return m.constrainView(b.String())
+}
+
+func requestPoll(cfg config.Config) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
+		defer cancel()
+		if err := daemon.RequestPoll(ctx); err != nil {
+			return pollErrorMsg{err: err}
+		}
+		return nil
+	}
 }
 
 func resizeHintPrefix(prefix string, st styles, required int) string {

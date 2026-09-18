@@ -18,6 +18,7 @@ const (
 	appDir              = "token-burn"
 	configFile          = "config.toml"
 	databaseFile        = "token-burn.db"
+	controlSocketFile   = "token-burn.sock"
 )
 
 type Config struct {
@@ -267,6 +268,10 @@ func DefaultDatabasePath() string {
 
 func DefaultLogPath() string {
 	return filepath.Join(XDGStateHome(), appDir, "token-burn.log")
+}
+
+func DefaultControlSocketPath() string {
+	return filepath.Join(XDGStateHome(), appDir, controlSocketFile)
 }
 
 func XDGConfigHome() string {

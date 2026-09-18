@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -115,6 +117,11 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.CredentialRefreshState == nil {
 		opts.CredentialRefreshState = &CredentialRefreshState{}
 	}
+	pollRequests, closeControl, err := listenForPollRequests(ctx, config.DefaultControlSocketPath())
+	if err != nil {
+		return err
+	}
+	defer closeControl()
 
 	backoff := Backoff{Base: opts.Config.PollInterval, Max: 15 * time.Minute}
 	for {
@@ -135,9 +142,88 @@ func Run(ctx context.Context, opts Options) error {
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
+		case <-pollRequests:
+			timer.Stop()
+			opts.logf("manual poll requested")
 		case <-timer.C:
 		}
 	}
+}
+
+// RequestPoll asks the running daemon to poll immediately. The TUI uses this
+// control path instead of polling providers itself.
+func RequestPoll(ctx context.Context) error {
+	return requestPollPath(ctx, config.DefaultControlSocketPath())
+}
+
+func requestPollPath(ctx context.Context, path string) error {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", path)
+	if err != nil {
+		return fmt.Errorf("connect to daemon: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("poll\n")); err != nil {
+		return fmt.Errorf("request daemon poll: %w", err)
+	}
+	return nil
+}
+
+func listenForPollRequests(ctx context.Context, path string) (<-chan struct{}, func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, nil, fmt.Errorf("create daemon control directory: %w", err)
+	}
+	if info, err := os.Stat(path); err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return nil, nil, fmt.Errorf("daemon control path is not a socket: %s", path)
+		}
+		conn, dialErr := net.DialTimeout("unix", path, 100*time.Millisecond)
+		if dialErr == nil {
+			conn.Close()
+			return nil, nil, errors.New("another token-burn daemon is already listening")
+		}
+		_ = os.Remove(path)
+	}
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen for daemon control requests: %w", err)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		listener.Close()
+		_ = os.Remove(path)
+		return nil, nil, fmt.Errorf("restrict daemon control socket: %w", err)
+	}
+	requests := make(chan struct{}, 1)
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				buf := make([]byte, 16)
+				n, err := conn.Read(buf)
+				if err != nil || string(buf[:n]) != "poll\n" {
+					return
+				}
+				select {
+				case requests <- struct{}{}:
+				case <-ctx.Done():
+					return
+				default:
+				}
+				_, _ = conn.Write([]byte("queued\n"))
+			}()
+		}
+	}()
+	closeControl := func() {
+		listener.Close()
+		<-serveDone
+		_ = os.Remove(path)
+	}
+	return requests, closeControl, nil
 }
 
 func shouldBackoff(result PollResult) bool {

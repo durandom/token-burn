@@ -208,7 +208,7 @@ token-burn tui --layout ultra    # one line without bars
 
 ```text
 token-burn  last poll 14:03:55
-q quit  r refresh  daemon poll 5m
+q quit  r reload  p poll  daemon poll 5m
 
 antigravity/antigravity-default
   claude and gpt   [────────────────────────]   0.0%
@@ -248,7 +248,12 @@ response exposes one. `token-burn` does not infer subscription names from local
 logs or pricing tables.
 
 By default, the TUI reads SQLite only. Provider polling belongs to the daemon,
-so refreshing the dashboard does not create extra provider requests.
+so reloading the dashboard does not create extra provider requests. The `r`
+key rereads the local SQLite/OpenObserve data; it does not trigger an
+immediate provider poll.
+
+Press `p` to ask the running daemon for an immediate poll. The TUI sends this
+request over the local control socket; it never contacts providers directly.
 
 Alternatively, the TUI and read-oriented commands (`status`, `once`, `history`,
 and `forecast`) can read exported metrics from an

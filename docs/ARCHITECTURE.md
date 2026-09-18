@@ -31,7 +31,11 @@ The CLI starts one-shot fetches, reads the local database, manages the daemon,
 and prints JSON for scripts.
 
 The TUI is a read-only dashboard over SQLite. It does not poll providers
-directly, so refreshing the dashboard does not increase provider request volume.
+directly, so reloading the dashboard does not increase provider request volume.
+The TUI's `r` key rereads SQLite/OpenObserve data; it does not trigger a
+provider poll.
+Pressing `p` asks the daemon for an immediate poll over the local control
+socket; the TUI still never contacts providers directly.
 The bar chart is the glanceable primary surface; detail text is the slower
 digital readout.
 
