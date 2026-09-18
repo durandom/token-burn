@@ -292,13 +292,7 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 			}
 			continue
 		}
-		snap, err := client.Fetch(ctx, usageprovider.Account{
-			Provider:          acct.Provider,
-			ID:                acct.ID,
-			ProviderAccountID: acct.ProviderAccountID,
-			AuthFile:          acct.AuthFile,
-			CredentialsFile:   acct.CredentialsFile,
-		})
+		snap, err := fetchAccount(ctx, opts.Config.HTTPTimeout, client, acct)
 		if err != nil {
 			pollErr := pollErrorFrom(acct.Provider, acct.ID, err)
 			opts.logf("%s/%s fetch error: code=%s http=%d", acct.Provider, acct.ID, orNone(pollErr.Code), pollErr.HTTPStatus)
@@ -306,13 +300,7 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 				opts.logf("%s/%s auth expired: attempting credential auto-refresh", acct.Provider, acct.ID)
 				markCredentialRefreshAttempt(opts, pollErr, startedAt)
 				if refreshErr := refreshCredentials(ctx, opts, pollErr); refreshErr == nil {
-					snap, err = client.Fetch(ctx, usageprovider.Account{
-						Provider:          acct.Provider,
-						ID:                acct.ID,
-						ProviderAccountID: acct.ProviderAccountID,
-						AuthFile:          acct.AuthFile,
-						CredentialsFile:   acct.CredentialsFile,
-					})
+					snap, err = fetchAccount(ctx, opts.Config.HTTPTimeout, client, acct)
 					if err == nil {
 						opts.logf("%s/%s credential auto-refresh succeeded: fetch recovered", acct.Provider, acct.ID)
 						if err := db.InsertSnapshot(ctx, snap, store.InsertOptions{}); err != nil {
@@ -358,6 +346,21 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 		}
 	}
 	return result, nil
+}
+
+func fetchAccount(ctx context.Context, timeout time.Duration, client usageprovider.Provider, acct config.Account) (usageprovider.Snapshot, error) {
+	if timeout <= 0 {
+		timeout = config.DefaultHTTPTimeout
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return client.Fetch(fetchCtx, usageprovider.Account{
+		Provider:          acct.Provider,
+		ID:                acct.ID,
+		ProviderAccountID: acct.ProviderAccountID,
+		AuthFile:          acct.AuthFile,
+		CredentialsFile:   acct.CredentialsFile,
+	})
 }
 
 func (o Options) logSnapshot(snap usageprovider.Snapshot, now time.Time) {

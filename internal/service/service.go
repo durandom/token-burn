@@ -207,6 +207,7 @@ func LaunchAgentPlist(spec Spec) ([]byte, error) {
 func launchAgentPathEnv(binaryPath string) string {
 	dirs := []string{
 		filepath.Dir(binaryPath),
+		filepath.Join(os.Getenv("HOME"), ".local", "bin"),
 		"/opt/homebrew/bin",
 		"/usr/local/bin",
 		"/usr/bin",
