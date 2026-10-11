@@ -358,3 +358,31 @@ func escapeXML(value string) string {
 	value = strings.ReplaceAll(value, "'", "&apos;")
 	return value
 }
+
+// Restart restarts a running service so it picks up a replaced binary.
+func Restart(ctx context.Context, label string) error {
+	name, args, err := restartCommand(runtime.GOOS, label)
+	if err != nil {
+		return err
+	}
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func restartCommand(goos, label string) (string, []string, error) {
+	if label == "" {
+		label = DefaultLabel
+	}
+	switch goos {
+	case "darwin":
+		// kickstart -k kills the running job and starts it again from the plist.
+		return "launchctl", []string{"kickstart", "-k", launchDomain() + "/" + label}, nil
+	case "linux":
+		return "systemctl", []string{"--user", "restart", systemdUnitName(label)}, nil
+	default:
+		return "", nil, fmt.Errorf("service restart is not implemented for %s yet", goos)
+	}
+}

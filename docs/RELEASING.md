@@ -65,7 +65,9 @@ token-burn upgrade
 ```
 
 The command downloads the matching archive for the current OS/architecture,
-verifies `checksums.txt`, and replaces the running binary path. A specific
+verifies `checksums.txt`, and replaces the running binary path. A running
+daemon service (LaunchAgent or systemd user unit) is restarted afterwards;
+pass `--no-restart` to skip that. A specific
 release can be installed with:
 
 ```sh

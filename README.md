@@ -107,6 +107,10 @@ Upgrade later:
 token-burn upgrade
 ```
 
+When the daemon service is running, `upgrade` restarts it so it runs the new
+binary (`--no-restart` skips that). Open dashboards keep the old version until
+you restart them.
+
 Known issue: upgrading **from v0.1.14 or older** can fail with
 `invalid cross-device link` and remove the installed binary when `/tmp` and
 the install directory are on different filesystems (for example tmpfs `/tmp`

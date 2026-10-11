@@ -246,6 +246,7 @@ func newUpgradeCommand(build BuildInfo) *cobra.Command {
 	var version string
 	var binaryPath string
 	var force bool
+	var noRestart bool
 
 	cmd := &cobra.Command{
 		Use:   "upgrade",
@@ -269,9 +270,22 @@ func newUpgradeCommand(build BuildInfo) *cobra.Command {
 				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "upgraded token-burn %s -> %s at %s\n", result.From, result.To, result.BinaryPath)
+			if noRestart {
+				return nil
+			}
+			// A running daemon keeps executing the old binary until it restarts.
+			status, err := service.ServiceStatus(ctx, service.DefaultLabel)
+			if err != nil || !status.Loaded {
+				return nil
+			}
+			if err := service.Restart(ctx, service.DefaultLabel); err != nil {
+				return fmt.Errorf("binary upgraded, but restarting the daemon failed: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "restarted the token-burn daemon; restart open dashboards to load the new version")
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&noRestart, "no-restart", false, "do not restart a running daemon service after upgrading")
 	cmd.Flags().StringVar(&repo, "repo", upgrade.DefaultRepo, "GitHub repository")
 	cmd.Flags().StringVar(&version, "version", "latest", "release version or latest")
 	cmd.Flags().StringVar(&binaryPath, "binary", "", "binary path to replace")

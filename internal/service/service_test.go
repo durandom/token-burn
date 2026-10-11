@@ -151,3 +151,27 @@ func TestLaunchAgentPlistRejectsEmptyExtraEnvValue(t *testing.T) {
 		t.Fatal("LaunchAgentPlist() with blank value succeeded, want error")
 	}
 }
+
+func TestRestartCommand(t *testing.T) {
+	tests := []struct {
+		goos     string
+		wantName string
+		wantArgs []string
+		wantErr  bool
+	}{
+		{goos: "darwin", wantName: "launchctl", wantArgs: []string{"kickstart", "-k", launchDomain() + "/" + DefaultLabel}},
+		{goos: "linux", wantName: "systemctl", wantArgs: []string{"--user", "restart", systemdUnitName(DefaultLabel)}},
+		{goos: "windows", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.goos, func(t *testing.T) {
+			name, args, err := restartCommand(tt.goos, "")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %t", err, tt.wantErr)
+			}
+			if name != tt.wantName || strings.Join(args, " ") != strings.Join(tt.wantArgs, " ") {
+				t.Fatalf("got %s %v, want %s %v", name, args, tt.wantName, tt.wantArgs)
+			}
+		})
+	}
+}
