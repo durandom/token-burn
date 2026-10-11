@@ -3,7 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -413,34 +415,8 @@ func (m Model) renderUsage(layout usageLayout) string {
 			}
 			b.WriteString(fmt.Sprintf("\n  resets owned %d · next expiry %s · last used %s", *c.OwnedResets, expiry, used))
 		}
-		if c := m.overageCredits[key]; c != nil {
-			balance := c.Balance
-			if c.Unlimited {
-				balance = "unlimited"
-			} else if balance == "" {
-				balance = "unknown"
-			}
-			b.WriteString("\n  overage credits " + balance)
-			if c.OverageLimitReached {
-				b.WriteString(" · overage limit reached")
-			}
-		}
-		if c := m.creditExpiry[key]; c != nil {
-			if m.overageCredits[key] == nil {
-				b.WriteString("\n  overage credits unknown")
-			}
-			amount := "unknown"
-			if c.AmountExpiring != nil {
-				amount = fmt.Sprintf("%g", *c.AmountExpiring)
-			}
-			b.WriteString(fmt.Sprintf("\n  credit expiry (configured) %s · amount %s", c.NextExpiry.Local().Format("Jan 02 2006 15:04"), amount))
-			for _, g := range c.Grants {
-				amount := "unknown"
-				if g.Amount != nil {
-					amount = fmt.Sprintf("%g", *g.Amount)
-				}
-				b.WriteString(fmt.Sprintf("\n  configured grant %s · amount %s · expires %s", g.Label, amount, g.ExpiresAt.Local().Format("Jan 02 2006")))
-			}
+		if line := creditLine(m.overageCredits[key], m.creditExpiry[key]); line != "" {
+			b.WriteString("\n  " + line)
 		}
 		b.WriteString("\n")
 		for _, row := range rows {
@@ -1306,4 +1282,58 @@ func (m Model) hasCapacity() bool {
 		}
 	}
 	return false
+}
+
+// creditLine folds live overage credits and the next configured expiry into
+// one dashboard line, e.g. "credits 62,750 · 62,500 expire Dec 31 (configured)".
+func creditLine(live *provider.OverageCredits, expiry *forecast.ConfiguredCreditCapacity) string {
+	if live == nil && expiry == nil {
+		return ""
+	}
+	balance := "unknown"
+	if live != nil {
+		switch {
+		case live.Unlimited:
+			balance = "unlimited"
+		case live.Balance != "":
+			balance = formatCredits(live.Balance)
+		}
+	}
+	line := "credits " + balance
+	if expiry != nil {
+		amount := "unknown amount"
+		if expiry.AmountExpiring != nil {
+			amount = formatCredits(strconv.FormatFloat(*expiry.AmountExpiring, 'f', -1, 64))
+		}
+		line += fmt.Sprintf(" · %s expire %s (configured)", amount, expiry.NextExpiry.Local().Format("Jan 02 2006"))
+	}
+	if live != nil && live.OverageLimitReached {
+		line += " · overage limit reached"
+	}
+	return line
+}
+
+// formatCredits renders a decimal credit amount with thousands separators and
+// without trailing zero decimals; unparsable input is returned unchanged.
+func formatCredits(s string) string {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return s
+	}
+	sign := ""
+	if v < 0 {
+		sign, v = "-", -v
+	}
+	digits, frac, _ := strings.Cut(strconv.FormatFloat(math.Round(v*100)/100, 'f', -1, 64), ".")
+	if frac != "" {
+		frac = "." + frac
+	}
+	var b strings.Builder
+	for i, r := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(r)
+	}
+	return sign + b.String() + frac
 }

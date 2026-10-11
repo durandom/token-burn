@@ -116,12 +116,12 @@ Manual expiry metadata can be configured in the XDG config:
 
 ```toml
 [credit_grants]
-codex = [{ label = "Pro promo", amount = 62500, expires_at = "2026-12-31T23:59:59Z" }]
+codex = [{ label = "Pro promo", amount = 62500, expires_at = "2026-12-31" }]
 ```
 
 Each provider has its own list. Amounts must be positive and finite; expiry must
 be RFC3339 or a quoted date-only string, normalized to UTC. Date-only means
-23:59:59 UTC on that day. Grants are never added automatically or stored as API
+23:59:59 local time on that day. Grants are never added automatically or stored as API
 observations. TUI, forecast capacity, and the `resets` CLI mark them `configured`,
 ignore expired entries, and show the nearest expiry and amount expiring.
 Grants sharing that exact timestamp are grouped. Each grant's displayed amount

@@ -392,12 +392,12 @@ Optional credit expiry can be entered in the XDG config. Add a top-level table
 ```toml
 [credit_grants]
 codex = [
-  { label = "Pro promo", amount = 62500, expires_at = "2026-12-31T23:59:59Z" },
+  { label = "Pro promo", amount = 62500, expires_at = "2026-12-31" },
 ]
 ```
 
 Amounts must be positive and finite. Expiry accepts an RFC3339 string or a quoted
-`YYYY-MM-DD`, interpreted as 23:59:59 UTC on that date. Times normalize to UTC.
+`YYYY-MM-DD`, interpreted as 23:59:59 local time on that date. Times normalize to UTC.
 Nothing is enabled by default. These grants apply to accounts for that provider.
 
 `token-burn resets` lists active configured grants beside the live credit balance;

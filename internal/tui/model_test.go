@@ -898,9 +898,9 @@ func TestViewRendersOverageCreditsSeparately(t *testing.T) {
 		credits *provider.OverageCredits
 		want    string
 	}{
-		{"balance", &provider.OverageCredits{Balance: "62750.0000000000", OverageLimitReached: true}, "overage credits 62750.0000000000"},
-		{"unlimited", &provider.OverageCredits{Unlimited: true}, "overage credits unlimited"},
-		{"unknown", &provider.OverageCredits{}, "overage credits unknown"},
+		{"balance", &provider.OverageCredits{Balance: "62750.0000000000", OverageLimitReached: true}, "credits 62,750 · overage limit reached"},
+		{"unlimited", &provider.OverageCredits{Unlimited: true}, "credits unlimited"},
+		{"unknown", &provider.OverageCredits{}, "credits unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			model := NewModel(testConfig(t))
@@ -939,12 +939,59 @@ func TestLocalRefreshOverlaysConfiguredCreditExpiry(t *testing.T) {
 	model.overageCredits = msg.overageCredits
 	model.loading = false
 	view := model.View()
-	for _, want := range []string{"overage credits 500", "credit expiry (configured)", "configured grant Pro promo", "amount 500"} {
+	for _, want := range []string{"credits 500 · 500 expire", "(configured)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("missing %s: %s", want, view)
 		}
 	}
-	if strings.Contains(view, "grant expired") {
+	if strings.Contains(view, "510") {
 		t.Fatal("expired grant in TUI")
+	}
+}
+
+func TestCreditLine(t *testing.T) {
+	expiry := time.Date(2026, 12, 31, 23, 59, 59, 0, time.Local)
+	amount := 62500.0
+	tests := []struct {
+		name   string
+		live   *provider.OverageCredits
+		expiry *forecast.ConfiguredCreditCapacity
+		want   string
+	}{
+		{name: "nothing", want: ""},
+		{name: "live only", live: &provider.OverageCredits{Balance: "62750.0000000000"}, want: "credits 62,750"},
+		{name: "live and configured expiry",
+			live:   &provider.OverageCredits{Balance: "62750.0000000000"},
+			expiry: &forecast.ConfiguredCreditCapacity{NextExpiry: expiry, AmountExpiring: &amount},
+			want:   "credits 62,750 · 62,500 expire Dec 31 2026 (configured)"},
+		{name: "unknown balance and amount",
+			expiry: &forecast.ConfiguredCreditCapacity{NextExpiry: expiry},
+			want:   "credits unknown · unknown amount expire Dec 31 2026 (configured)"},
+		{name: "unlimited", live: &provider.OverageCredits{Unlimited: true}, want: "credits unlimited"},
+		{name: "limit reached", live: &provider.OverageCredits{Balance: "0", OverageLimitReached: true}, want: "credits 0 · overage limit reached"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := creditLine(tt.live, tt.expiry); got != tt.want {
+				t.Fatalf("creditLine = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatCredits(t *testing.T) {
+	tests := map[string]string{
+		"62750.0000000000": "62,750",
+		"999":              "999",
+		"1000":             "1,000",
+		"1234567.5":        "1,234,567.5",
+		"12.345":           "12.35",
+		"-1500":            "-1,500",
+		"abc":              "abc",
+	}
+	for in, want := range tests {
+		if got := formatCredits(in); got != want {
+			t.Errorf("formatCredits(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

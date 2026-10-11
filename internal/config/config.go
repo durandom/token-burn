@@ -337,7 +337,7 @@ database_path = %q
 
 # Optional manual credit expiry, shared by accounts for this provider.
 # [credit_grants]
-# codex = [{ label = "Pro promo", amount = 62500, expires_at = "2026-12-31T23:59:59Z" }]
+# codex = [{ label = "Pro promo", amount = 62500, expires_at = "2026-12-31" }]
 
 [otel]
 enabled = false

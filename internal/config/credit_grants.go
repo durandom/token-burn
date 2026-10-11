@@ -35,9 +35,11 @@ func parseCreditGrants(raw map[string][]fileCreditGrant) (map[string][]provider.
 			}
 			at, err := time.Parse(time.RFC3339, g.ExpiresAt)
 			if err != nil {
-				at, err = time.Parse("2006-01-02", g.ExpiresAt)
+				// A bare date means the end of that day on the user's clock,
+				// which is how providers announce expiry dates.
+				at, err = time.ParseInLocation("2006-01-02", g.ExpiresAt, time.Local)
 				if err == nil {
-					at = at.Add(24*time.Hour - time.Second)
+					at = at.AddDate(0, 0, 1).Add(-time.Second)
 				}
 			}
 			if err != nil {

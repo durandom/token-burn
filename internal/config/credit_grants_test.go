@@ -14,7 +14,7 @@ func TestConfiguredCreditGrantsLoadAndValidate(t *testing.T) {
 		invalid                    bool
 	}{
 		{"RFC3339 offset", "62500", "2026-12-31T23:59:59+02:00", "2026-12-31T21:59:59Z", false},
-		{"date only", "62500", "2026-12-31", "2026-12-31T23:59:59Z", false},
+		{"date only", "62500", "2026-12-31", time.Date(2026, 12, 31, 23, 59, 59, 0, time.Local).UTC().Format(time.RFC3339), false},
 		{"fractional amount", "12.5", "2026-12-31T23:59:59Z", "2026-12-31T23:59:59Z", false},
 		{"zero", "0", "2026-12-31", "", true},
 		{"negative", "-10", "2026-12-31", "", true},
