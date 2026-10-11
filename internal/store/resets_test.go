@@ -92,7 +92,7 @@ func TestResetUpsertsPlanHistoryAndCadence(t *testing.T) {
 	defer db.Close()
 	now := time.Date(2026, 10, 11, 10, 0, 0, 0, time.UTC)
 	snap := provider.Snapshot{Provider: "codex", AccountID: "local", ObservedAt: now, ResetDetailsAttemptedAt: &now, Resets: &provider.ResetSummary{AvailableCount: 1}, ResetDetails: &provider.ResetDetails{Credits: []provider.ResetCredit{{ID: "fake-credit", Status: "available", ResetsLeft: 1, ExpiresAt: resetTime(now.Add(time.Hour))}}, Events: []provider.ResetEvent{{ID: "fake-credit:granted", CreditID: "fake-credit", Kind: "granted", OccurredAt: provider.Timestamp{Time: now}, Source: "api", Count: 1}}}, PlanLimitHistory: &provider.PlanLimitHistory{Approximate: true, Periods: []provider.PlanLimitPeriod{{ID: "fake-period", StartsAt: provider.Timestamp{Time: now.Add(-7 * 24 * time.Hour)}, EndsAt: provider.Timestamp{Time: now}, UsedBasisPoints: 2000}}}}
-	for _, used := range []int{2000, 3500} {
+	for _, used := range []float64{2000, 3500.25} {
 		snap.PlanLimitHistory.Periods[0].UsedBasisPoints = used
 		if err := db.InsertSnapshot(ctx, snap, InsertOptions{}); err != nil {
 			t.Fatal(err)
@@ -102,7 +102,7 @@ func TestResetUpsertsPlanHistoryAndCadence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(h.Events) != 1 || len(h.PlanLimitHistory.Periods) != 1 || h.PlanLimitHistory.Periods[0].UsedBasisPoints != 3500 || !h.PlanLimitHistory.Approximate {
+	if len(h.Events) != 1 || len(h.PlanLimitHistory.Periods) != 1 || h.PlanLimitHistory.Periods[0].UsedBasisPoints != 3500.25 || !h.PlanLimitHistory.Approximate {
 		t.Fatal("upsert or coverage metadata")
 	}
 	after, err := db.ResetDetailsAfter(ctx, "codex", "local")

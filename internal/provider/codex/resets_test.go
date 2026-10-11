@@ -38,7 +38,7 @@ func TestResetDetailsReadOnlyPaginationAndCadence(t *testing.T) {
 			if r.URL.Query().Get("days") != "7" {
 				t.Error("plan history days")
 			}
-			fmt.Fprint(w, `{"periods":[{"id":"fake-period","window_minutes":10080,"plan_type":"plus","starts_at":"2026-10-01T10:00:00Z","ends_at":"2026-10-08T10:00:00Z","accounting_complete":true,"used_basis_points":3456,"breakdowns":[{"dimension":"model","rows":[{"key":"fake-model","basis_points":3456}]}]}],"data_as_of":"2026-10-11T10:00:00Z","coverage_start":"2026-10-01T10:00:00Z","coverage_complete":true,"approximate":true,"boundary_tolerance_seconds":60}`)
+			fmt.Fprint(w, `{"periods":[{"id":"fake-period","window_minutes":10080,"plan_type":"plus","starts_at":"2026-10-01T10:00:00Z","ends_at":"2026-10-08T10:00:00Z","accounting_complete":true,"used_basis_points":3456.760161,"breakdowns":[{"dimension":"model","rows":[{"key":"fake-model","basis_points":3456.760161}]}]}],"data_as_of":"2026-10-11T10:00:00Z","coverage_start":"2026-10-01T10:00:00Z","coverage_complete":true,"approximate":true,"boundary_tolerance_seconds":60}`)
 		default:
 			t.Errorf("unexpected endpoint %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -61,7 +61,7 @@ func TestResetDetailsReadOnlyPaginationAndCadence(t *testing.T) {
 	if snap.ResetDetails.Events[1].CreditID != "fake-old" || snap.ResetDetails.Events[1].Source != "api" {
 		t.Fatal("history mapping")
 	}
-	if snap.PlanLimitHistory.Periods[0].Breakdowns[0].Rows[0].BasisPoints != 3456 || !snap.PlanLimitHistory.Approximate {
+	if snap.PlanLimitHistory.Periods[0].Breakdowns[0].Rows[0].BasisPoints != 3456.760161 || !snap.PlanLimitHistory.Approximate {
 		t.Fatal("plan history mapping")
 	}
 	now = now.Add(time.Minute)

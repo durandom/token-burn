@@ -79,7 +79,7 @@ type PlanLimitPeriod struct {
 	StartsAt           Timestamp       `json:"starts_at"`
 	EndsAt             Timestamp       `json:"ends_at"`
 	AccountingComplete bool            `json:"accounting_complete"`
-	UsedBasisPoints    int             `json:"used_basis_points"`
+	UsedBasisPoints    float64         `json:"used_basis_points"`
 	Breakdowns         []PlanBreakdown `json:"breakdowns"`
 }
 type PlanBreakdown struct {
@@ -87,8 +87,8 @@ type PlanBreakdown struct {
 	Rows      []PlanBreakdownRow `json:"rows"`
 }
 type PlanBreakdownRow struct {
-	Key         string `json:"key"`
-	BasisPoints int    `json:"basis_points"`
+	Key         string  `json:"key"`
+	BasisPoints float64 `json:"basis_points"`
 }
 type PlanLimitHistory struct {
 	Periods                  []PlanLimitPeriod `json:"periods"`

@@ -72,7 +72,7 @@ func newResetsCommand(configPath *string) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "  %s %s credit=%s count=%d source=%s\n", localResetTime(&e.OccurredAt.Time), e.Kind, e.CreditID, e.Count, e.Source)
 			}
 			for _, p := range h.PlanLimitHistory.Periods {
-				fmt.Fprintf(cmd.OutOrStdout(), "  plan period %s %s–%s %.2f%% complete=%t\n", p.ID, localResetTime(&p.StartsAt.Time), localResetTime(&p.EndsAt.Time), float64(p.UsedBasisPoints)/100, p.AccountingComplete)
+				fmt.Fprintf(cmd.OutOrStdout(), "  plan period %s %s–%s %.2f%% complete=%t\n", p.ID, localResetTime(&p.StartsAt.Time), localResetTime(&p.EndsAt.Time), p.UsedBasisPoints/100, p.AccountingComplete)
 			}
 		}
 		return nil
