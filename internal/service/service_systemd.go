@@ -72,13 +72,6 @@ func SystemdUnit(spec Spec) ([]byte, error) {
 	for _, item := range systemdHomeEnvironment() {
 		fmt.Fprintf(&buf, "Environment=%s=%s\n", item.key, item.value)
 	}
-	extraKeys, err := sortedExtraEnv(spec.ExtraEnv)
-	if err != nil {
-		return nil, err
-	}
-	for _, key := range extraKeys {
-		fmt.Fprintf(&buf, "Environment=%s\n", systemEnvAssignment(key, spec.ExtraEnv[key]))
-	}
 	// Hardening: the daemon only needs to read provider credentials under
 	// $HOME and write the state database.
 	buf.WriteString("NoNewPrivileges=true\n")
@@ -162,8 +155,7 @@ func installSystemdUnit(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("write systemd user unit: %w", err)
 	}
 	// WriteFile only applies the mode at creation; enforce it for units
-	// replaced over an older, possibly world-readable file carrying ExtraEnv
-	// secrets.
+	// replaced over an older, possibly world-readable file.
 	if err := os.Chmod(path, 0o600); err != nil {
 		return fmt.Errorf("restrict systemd user unit permissions: %w", err)
 	}
@@ -259,13 +251,4 @@ func escapeExec(value string) string {
 		return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
 	}
 	return value
-}
-
-// systemEnvAssignment renders KEY=value as a quoted systemd Environment=
-// argument. Quoting the whole assignment keeps values with spaces or quotes
-// intact; systemd unescapes \\ and \" inside double quotes.
-func systemEnvAssignment(key, value string) string {
-	escaped := strings.ReplaceAll(value, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-	return `"` + key + `=` + escaped + `"`
 }

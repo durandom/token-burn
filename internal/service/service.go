@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -25,11 +24,6 @@ type Spec struct {
 	LogPath    string
 	// DatabasePath feeds the systemd ReadWritePaths allowlist.
 	DatabasePath string
-	// ExtraEnv is copied verbatim into the service unit environment,
-	// deterministically sorted by key. Keys that the unit generator
-	// itself owns (PATH, HOME, XDG_*) are rejected to avoid duplicate
-	// assignments with launchd-undefined precedence.
-	ExtraEnv map[string]string
 }
 
 type Status struct {
@@ -125,32 +119,6 @@ func LaunchAgentPath(label string) (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", label+".plist"), nil
 }
 
-// reservedUnitEnvKeys are set by the unit generator itself; ExtraEnv must
-// not shadow them.
-var reservedUnitEnvKeys = map[string]bool{
-	"PATH": true, "HOME": true, "XDG_CONFIG_HOME": true, "XDG_STATE_HOME": true,
-}
-
-// sortedExtraEnv validates and sorts ExtraEnv keys. Validation lives here so
-// both the launchd and the systemd renderer enforce the same rules.
-func sortedExtraEnv(extra map[string]string) ([]string, error) {
-	if len(extra) == 0 {
-		return nil, nil
-	}
-	keys := make([]string, 0, len(extra))
-	for key, value := range extra {
-		if reservedUnitEnvKeys[key] {
-			return nil, fmt.Errorf("service env %q is managed by the service unit and cannot be overridden", key)
-		}
-		if strings.TrimSpace(value) == "" {
-			return nil, fmt.Errorf("service env %q must not be empty", key)
-		}
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys, nil
-}
-
 func LaunchAgentPlist(spec Spec) ([]byte, error) {
 	if spec.Label == "" {
 		spec.Label = DefaultLabel
@@ -186,13 +154,6 @@ func LaunchAgentPlist(spec Spec) ([]byte, error) {
 	writeKeyString(&buf, "PATH", launchAgentPathEnv(spec.BinaryPath))
 	for _, item := range launchAgentHomeEnvironment() {
 		writeKeyString(&buf, item.key, item.value)
-	}
-	extraKeys, err := sortedExtraEnv(spec.ExtraEnv)
-	if err != nil {
-		return nil, err
-	}
-	for _, key := range extraKeys {
-		writeKeyString(&buf, key, spec.ExtraEnv[key])
 	}
 	buf.WriteString("  </dict>\n")
 	writeKeyBool(&buf, "RunAtLoad", true)
@@ -266,8 +227,7 @@ func installLaunchAgent(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("write LaunchAgent plist: %w", err)
 	}
 	// WriteFile only applies the mode at creation; a plist left over from an
-	// earlier install keeps its old mode, and 0644 would expose ExtraEnv
-	// secrets to other local users.
+	// earlier install keeps its old mode.
 	if err := os.Chmod(path, 0600); err != nil {
 		return fmt.Errorf("restrict LaunchAgent plist permissions: %w", err)
 	}

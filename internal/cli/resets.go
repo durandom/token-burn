@@ -16,7 +16,7 @@ func newResetsCommand(configPath *string) *cobra.Command {
 	var name, account string
 	var jsonOut bool
 	cmd := &cobra.Command{Use: "resets", Short: "List stored reset credits, grant/use events, and plan-limit history", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load(*configPath)
+		cfg, err := loadRuntimeConfig(*configPath)
 		if err != nil {
 			return err
 		}

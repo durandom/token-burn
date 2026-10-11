@@ -37,18 +37,19 @@ type TUIConfig struct {
 	Theme string
 }
 
-// ServiceConfig configures the installed user service. Env entries are
-// copied verbatim into the service unit's environment (launchd
-// EnvironmentVariables / systemd Environment=). They are the intended way
-// to hand provider secrets such as TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID
-// to the daemon without putting them on the user's global environment.
+// ServiceConfig supplies process environment defaults at runtime from config.toml.
+// Existing process environment variables take precedence, even when empty.
+// Values may contain provider secrets and must never be logged.
 type ServiceConfig struct {
 	Env map[string]string
 }
 
 // envKeyPattern constrains service.env keys to UPPER_SNAKE_CASE identifiers.
-// It keeps users from injecting malformed assignments into service units.
 var envKeyPattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+
+var reservedEnvKeys = map[string]bool{
+	"PATH": true, "HOME": true, "XDG_CONFIG_HOME": true, "XDG_STATE_HOME": true,
+}
 
 type OTelConfig struct {
 	Enabled        bool
@@ -247,11 +248,27 @@ func Load(path string) (Config, error) {
 	default:
 		return Config{}, fmt.Errorf("invalid tui.theme %q; want auto, dark, or light", cfg.TUI.Theme)
 	}
-	if len(fc.Service.Env) > 0 {
+	// The struct decoder omits empty tables. Preserve an empty [service.env]
+	// section so daemon startup can still check config permissions.
+	if fc.Service.Env == nil {
+		var tables map[string]any
+		if err := toml.Unmarshal(data, &tables); err != nil {
+			return Config{}, fmt.Errorf("parse config: %w", err)
+		}
+		if service, ok := tables["service"].(map[string]any); ok {
+			if _, exists := service["env"]; exists {
+				fc.Service.Env = map[string]string{}
+			}
+		}
+	}
+	if fc.Service.Env != nil {
 		cfg.Service.Env = make(map[string]string, len(fc.Service.Env))
 		for key, value := range fc.Service.Env {
 			if !envKeyPattern.MatchString(key) {
 				return Config{}, fmt.Errorf("invalid service.env key %q; want UPPER_SNAKE_CASE", key)
+			}
+			if reservedEnvKeys[key] {
+				return Config{}, fmt.Errorf("service.env %q is reserved and cannot be overridden", key)
 			}
 			if strings.TrimSpace(value) == "" {
 				return Config{}, fmt.Errorf("service.env %q must not be empty", key)
@@ -349,10 +366,11 @@ export_interval = "60s"
 theme = "auto"
 
 # [service.env]
-# Extra environment variables copied into the installed service unit
-# (launchd EnvironmentVariables / systemd Environment=). Use this to give
-# the daemon provider credentials that must not live in the global shell
-# environment, e.g. the public Antigravity CLI OAuth client:
+# Environment defaults read at runtime from config.toml, before provider startup.
+# Existing process environment variables win, even when empty. The service unit
+# no longer carries these values. Keep config.toml mode 0600 for secrets;
+# the daemon warns if this section is present in a group/world-readable file.
+# Restart the daemon after changes, e.g. for the Antigravity CLI OAuth client:
 # TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID = "..."
 # TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_SECRET = "..."
 

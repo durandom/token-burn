@@ -731,10 +731,10 @@ characters in current builds) before use. A one-off
 `https://oauth2.googleapis.com/token` confirms the pair; Google does not
 rotate the vendor refresh token on use.
 
-For the daemon, put the values in the config file so `token-burn install`
-copies them into the service unit environment (launchd
-`EnvironmentVariables`, systemd `Environment=`; the unit file is written
-mode 0600):
+Put the values in `config.toml`. The daemon and runtime commands read
+`[service.env]` at startup, before building providers. Existing process
+environment variables take precedence, including empty values. The service
+unit no longer carries these values; keep the config file mode 0600:
 
 ```toml
 [service.env]
@@ -742,8 +742,11 @@ TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID = "…"
 TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_SECRET = "…"
 ```
 
-Then re-run `token-burn install` and restart the service — a running
-daemon does not pick up changed environment variables. With credentials
+Restart the service after changing the config — a running daemon does not
+reload these values. Re-run `token-burn install` once to remove any values
+embedded by older versions; install rewrites the whole plist/unit and keeps
+it mode 0600. At startup the daemon warns, without printing values, if a
+config containing `[service.env]` is group/world readable. With credentials
 in place, token-burn bridges the gaps in which neither the IDE nor `agy`
 refreshes the shared token file. These endpoints and the embedded client
 are undocumented and may break without notice.

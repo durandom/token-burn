@@ -129,6 +129,14 @@ If `~/.local/bin` is not on your `PATH`, either add it or set
 TOKEN_BURN_INSTALL_DIR=/usr/local/bin sh scripts/install.sh
 ```
 
+Provider environment defaults can be stored in `[service.env]` in
+`config.toml`. The daemon and runtime commands read them once at startup,
+before provider initialization. Existing process environment variables win,
+even when empty. Service units no longer carry these values. Keep config
+mode 0600; the daemon warns if a config containing this section is group/world
+readable. Restart the daemon after edits. Re-run `token-burn install` once
+to remove values embedded by older versions; it rewrites the whole service file.
+
 ## Install From Source
 
 Requirements:

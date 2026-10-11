@@ -113,7 +113,7 @@ func newOTelBackfillCommand(configPath *string, build BuildInfo) *cobra.Command 
 			if from != nil && to != nil && from.After(*to) {
 				return errors.New("--from must not be after --to")
 			}
-			cfg, err := config.Load(*configPath)
+			cfg, err := loadRuntimeConfig(*configPath)
 			if err != nil {
 				return err
 			}
@@ -221,7 +221,7 @@ func newTUICommand(configPath *string, build BuildInfo) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg, err := config.Load(*configPath)
+			cfg, err := loadRuntimeConfig(*configPath)
 			if err != nil {
 				return err
 			}
@@ -301,7 +301,7 @@ func newOTelTestCommand(configPath *string) *cobra.Command {
 		Short: "Emit a synthetic OpenTelemetry metric",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(*configPath)
+			cfg, err := loadRuntimeConfig(*configPath)
 			if err != nil {
 				return err
 			}
@@ -372,7 +372,6 @@ func installSpec(binaryPath, configPath string) (service.Spec, error) {
 		return service.Spec{}, err
 	}
 	spec.DatabasePath = cfg.DatabasePath
-	spec.ExtraEnv = cfg.Service.Env
 	return spec, nil
 }
 
@@ -423,10 +422,11 @@ func newDaemonCommand(configPath *string, verbose *bool) *cobra.Command {
 		Short: "Run the polling daemon in the foreground",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(*configPath)
+			cfg, err := loadRuntimeConfig(*configPath)
 			if err != nil {
 				return err
 			}
+			warnServiceEnvPermissions(cmd.ErrOrStderr(), *configPath, cfg)
 			opts := daemon.Options{Config: cfg}
 			if verbose != nil && *verbose {
 				opts.Verbose = cmd.OutOrStdout()
@@ -472,7 +472,7 @@ func newOnceCommand(configPath *string, verbose *bool) *cobra.Command {
 		Short: "Fetch current live usage once",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(*configPath)
+			cfg, err := loadRuntimeConfig(*configPath)
 			if err != nil {
 				return err
 			}
@@ -532,7 +532,7 @@ func newStatusCommand(configPath *string) *cobra.Command {
 		Short: "Print latest stored usage status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(*configPath)
+			cfg, err := loadRuntimeConfig(*configPath)
 			if err != nil {
 				return err
 			}
@@ -608,7 +608,7 @@ func newHistoryCommand(configPath *string) *cobra.Command {
 		Short: "Print stored usage history",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(*configPath)
+			cfg, err := loadRuntimeConfig(*configPath)
 			if err != nil {
 				return err
 			}
@@ -660,7 +660,7 @@ func newForecastCommand(configPath *string) *cobra.Command {
 		Short: "Forecast exhaustion from stored usage history",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(*configPath)
+			cfg, err := loadRuntimeConfig(*configPath)
 			if err != nil {
 				return err
 			}

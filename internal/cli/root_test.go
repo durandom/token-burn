@@ -14,6 +14,7 @@ import (
 
 	"github.com/durandom/token-burn/internal/config"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
+	"github.com/durandom/token-burn/internal/service"
 	"github.com/durandom/token-burn/internal/store"
 )
 
@@ -188,7 +189,7 @@ func TestPrintVerboseErrorFlagsRateLimit(t *testing.T) {
 	}
 }
 
-func TestInstallSpecPassesServiceEnv(t *testing.T) {
+func TestInstallSpecOmitsServiceEnv(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
 	data := []byte(`
@@ -207,7 +208,19 @@ id = "codex-default"
 	if err != nil {
 		t.Fatalf("installSpec() error = %v", err)
 	}
-	if spec.ExtraEnv["TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID"] != "107100-test.apps.googleusercontent.com" {
-		t.Fatalf("ExtraEnv = %#v, want antigravity client id", spec.ExtraEnv)
+	for name, render := range map[string]func(service.Spec) ([]byte, error){
+		"launchd": service.LaunchAgentPlist, "systemd": service.SystemdUnit,
+	} {
+		t.Run(name, func(t *testing.T) {
+			unit, err := render(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, secret := range []string{"TOKEN_BURN_ANTIGRAVITY_OAUTH_CLIENT_ID", "107100-test.apps.googleusercontent.com"} {
+				if strings.Contains(string(unit), secret) {
+					t.Fatal("service unit contains config environment")
+				}
+			}
+		})
 	}
 }

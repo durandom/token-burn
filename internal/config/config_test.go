@@ -160,9 +160,13 @@ id = "codex-default"
 
 func TestLoadServiceEnvRejectsInvalidKeys(t *testing.T) {
 	for name, key := range map[string]string{
-		"lowercase":     "token_burn_secret",
-		"leading-digit": "9TOKEN",
-		"shell-meta":    "PATH${HOME}",
+		"lowercase":       "token_burn_secret",
+		"reserved PATH":   "PATH",
+		"reserved HOME":   "HOME",
+		"reserved config": "XDG_CONFIG_HOME",
+		"reserved state":  "XDG_STATE_HOME",
+		"leading-digit":   "9TOKEN",
+		"shell-meta":      "PATH${HOME}",
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -179,13 +183,30 @@ func TestLoadServiceEnvRejectsInvalidKeys(t *testing.T) {
 }
 
 func TestLoadServiceEnvRejectsEmptyValue(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(path, []byte("[service.env]\nTOKEN_BURN_X = \"\"\n"), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
+	for _, value := range []string{"", " "} {
+		t.Run("value="+value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte("[service.env]\nTOKEN_BURN_X = \""+value+"\"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("Load() with blank value succeeded")
+			}
+		})
 	}
-	if _, err := Load(path); err == nil {
-		t.Fatal("Load() with empty value succeeded, want error")
+}
+
+func TestLoadEmptyServiceEnvSection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[service.env]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Service.Env == nil {
+		t.Fatal("empty section must remain detectable for the permission warning")
 	}
 }
 
