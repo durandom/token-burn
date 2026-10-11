@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/durandom/token-burn/internal/provider"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -28,6 +29,7 @@ type Config struct {
 	OTel         OTelConfig
 	TUI          TUIConfig
 	Service      ServiceConfig
+	CreditGrants map[string][]provider.ConfiguredCreditGrant
 	Accounts     []Account
 }
 
@@ -78,13 +80,14 @@ type Account struct {
 }
 
 type fileConfig struct {
-	PollInterval string      `toml:"poll_interval"`
-	HTTPTimeout  string      `toml:"http_timeout"`
-	DatabasePath string      `toml:"database_path"`
-	OTel         fileOTel    `toml:"otel"`
-	TUI          fileTUI     `toml:"tui"`
-	Service      fileService `toml:"service"`
-	Accounts     []Account   `toml:"accounts"`
+	PollInterval string                       `toml:"poll_interval"`
+	HTTPTimeout  string                       `toml:"http_timeout"`
+	DatabasePath string                       `toml:"database_path"`
+	OTel         fileOTel                     `toml:"otel"`
+	TUI          fileTUI                      `toml:"tui"`
+	Service      fileService                  `toml:"service"`
+	CreditGrants map[string][]fileCreditGrant `toml:"credit_grants"`
+	Accounts     []Account                    `toml:"accounts"`
 }
 
 type fileService struct {
@@ -257,6 +260,10 @@ func Load(path string) (Config, error) {
 		}
 	}
 
+	cfg.CreditGrants, err = parseCreditGrants(fc.CreditGrants)
+	if err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
@@ -327,6 +334,10 @@ func defaultFileContents() string {
 	return fmt.Sprintf(`poll_interval = "5m"
 http_timeout = "15s"
 database_path = %q
+
+# Optional manual credit expiry, shared by accounts for this provider.
+# [credit_grants]
+# codex = [{ label = "Pro promo", amount = 62500, expires_at = "2026-12-31T23:59:59Z" }]
 
 [otel]
 enabled = false

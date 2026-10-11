@@ -380,6 +380,34 @@ provider = "zai"
 id = "zai-default"
 ```
 
+## Configured credit expiry
+
+Optional credit expiry can be entered in the XDG config. Add a top-level table
+(outside `[[accounts]]`), using the grant terms shown for your account:
+
+```toml
+[credit_grants]
+codex = [
+  { label = "Pro promo", amount = 62500, expires_at = "2026-12-31T23:59:59Z" },
+]
+```
+
+Amounts must be positive and finite. Expiry accepts an RFC3339 string or a quoted
+`YYYY-MM-DD`, interpreted as 23:59:59 UTC on that date. Times normalize to UTC.
+Nothing is enabled by default. These grants apply to accounts for that provider.
+
+`token-burn resets` lists active configured grants beside the live credit balance;
+the TUI and `forecast` show the next configured expiry and amount expiring. Each
+displayed amount is independently capped at the nonnegative live balance. No
+consumption order is assumed, so do not sum the per-grant caps. When the balance
+is unknown, capped amounts remain unknown. Expired entries are ignored.
+
+Purchased credits expire 12 months after purchase, according to
+[OpenAI's credits help](https://help.openai.com/en/articles/12642688-using-credits-for-flexible-usage-in-chatgpt-personal-plans).
+The example reflects the reported 62,500-credit Pro promo expiring December 31,
+2026; confirm your own offer before configuring it. See
+[Codex issue #50931](https://github.com/openai/codex/issues/50931).
+
 ## Authentication
 
 `token-burn` does not run login flows or maintain a separate credential store.

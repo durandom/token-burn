@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	MetricCreditSecondsToNextExpiry     = "token_burn_credit_seconds_to_next_expiry"
+	MetricCreditAmountExpiring          = "token_burn_credit_amount_expiring"
 	MetricOverageCreditsBalance         = "token_burn_overage_credits_balance"
 	MetricOverageLimitReached           = "token_burn_overage_limit_reached"
 	MetricResetsAvailable               = "token_burn_resets_available"
@@ -125,7 +127,15 @@ func (e *Exporter) AddCounter(ctx context.Context, name string, value int64, att
 	counter.Add(ctx, value, metric.WithAttributes(attrs...))
 }
 
-func EmitSnapshot(ctx context.Context, recorder Recorder, snap usageprovider.Snapshot, now time.Time) {
+func EmitSnapshot(ctx context.Context, recorder Recorder, snap usageprovider.Snapshot, now time.Time, configured ...*forecast.ConfiguredCreditCapacity) {
+	if len(configured) > 0 && configured[0] != nil {
+		c := configured[0]
+		attrs := []attribute.KeyValue{attribute.String("provider", snap.Provider), attribute.String("account_id", snap.AccountID), attribute.String("source", "configured")}
+		recorder.RecordGauge(ctx, MetricCreditSecondsToNextExpiry, c.NextExpiry.Sub(now.UTC()).Seconds(), attrs...)
+		if c.AmountExpiring != nil {
+			recorder.RecordGauge(ctx, MetricCreditAmountExpiring, *c.AmountExpiring, attrs...)
+		}
+	}
 	var credits []usageprovider.ResetCredit
 	var events []usageprovider.ResetEvent
 	if snap.ResetDetails != nil {

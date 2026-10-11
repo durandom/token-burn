@@ -25,7 +25,7 @@ func newResetsCommand(configPath *string) *cobra.Command {
 			return err
 		}
 		defer db.Close()
-		out := []store.ResetHistory{}
+		out := []resetOutput{}
 		for _, a := range cfg.Accounts {
 			if (name != "" && name != a.Provider) || (account != "" && account != a.ID) {
 				continue
@@ -34,7 +34,11 @@ func newResetsCommand(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out = append(out, h)
+			live, err := db.LatestOverageCredits(cmd.Context(), a.Provider, a.ID)
+			if err != nil {
+				return err
+			}
+			out = append(out, resetOutput{ResetHistory: h, OverageCredits: live, ConfiguredCreditCapacity: forecast.CreditExpiry(cfg.CreditGrants[a.Provider], live, time.Now())})
 		}
 		if jsonOut {
 			return writeJSON(cmd.OutOrStdout(), out)
@@ -46,6 +50,18 @@ func newResetsCommand(configPath *string) *cobra.Command {
 				owned = fmt.Sprint(*c.OwnedResets)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s/%s resets owned: %s; next expiry: %s; last used: %s\n", h.Provider, h.AccountID, owned, localResetTime(c.NextExpiry), localResetTime(c.LastUsed))
+			if h.OverageCredits == nil && h.ConfiguredCreditCapacity != nil {
+				fmt.Fprintln(cmd.OutOrStdout(), "  live overage credits: unknown")
+			}
+			if h.OverageCredits != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "  live overage credits: %s\n", overageBalanceText(h.OverageCredits))
+			}
+			if c := h.ConfiguredCreditCapacity; c != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "  credit expiry (configured): %s amount expiring=%s\n", localResetTime(&c.NextExpiry), creditAmountText(c.AmountExpiring))
+				for _, g := range c.Grants {
+					fmt.Fprintf(cmd.OutOrStdout(), "  configured grant %q amount=%s expires=%s\n", g.Label, creditAmountText(g.Amount), localResetTime(&g.ExpiresAt))
+				}
+			}
 			for _, err := range h.Errors {
 				fmt.Fprintf(cmd.OutOrStdout(), "  detail warning: %s\n", err)
 			}
@@ -75,6 +91,10 @@ func localResetTime(t *time.Time) string {
 
 func attachStoredCapacity(ctx context.Context, cfg config.Config, results []forecastOutput, now time.Time) error {
 	if cfg.OTel.Read.Mode == "openobserve" {
+		for i := range results {
+			r := &results[i]
+			r.ConfiguredCreditCapacity = forecast.CreditExpiry(cfg.CreditGrants[r.Provider], nil, now)
+		}
 		return nil
 	}
 	db, err := store.Open(ctx, cfg.DatabasePath)
@@ -92,6 +112,7 @@ func attachStoredCapacity(ctx context.Context, cfg config.Config, results []fore
 		if err != nil {
 			return err
 		}
+		r.ConfiguredCreditCapacity = forecast.CreditExpiry(cfg.CreditGrants[r.Provider], r.OverageCredits, now)
 		if h.Summary != nil {
 			c := forecast.Capacity(h.Summary, h.Credits, h.Events, now)
 			r.ResetCapacity = &c
@@ -108,4 +129,17 @@ func overageBalanceText(c *provider.OverageCredits) string {
 		return "unknown"
 	}
 	return c.Balance
+}
+
+type resetOutput struct {
+	store.ResetHistory
+	OverageCredits           *provider.OverageCredits           `json:"overage_credits,omitempty"`
+	ConfiguredCreditCapacity *forecast.ConfiguredCreditCapacity `json:"configured_credit_capacity,omitempty"`
+}
+
+func creditAmountText(amount *float64) string {
+	if amount == nil {
+		return "unknown"
+	}
+	return fmt.Sprintf("%g", *amount)
 }

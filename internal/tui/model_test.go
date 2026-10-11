@@ -916,3 +916,35 @@ func TestViewRendersOverageCreditsSeparately(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalRefreshOverlaysConfiguredCreditExpiry(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Accounts = []config.Account{{Provider: "codex", ID: "local"}}
+	now := time.Now().UTC()
+	cfg.CreditGrants = map[string][]provider.ConfiguredCreditGrant{"codex": {{Label: "Pro promo", Amount: 62500, ExpiresAt: now.Add(time.Hour)}, {Label: "expired", Amount: 10, ExpiresAt: now}}}
+	db, err := store.Open(context.Background(), cfg.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertSnapshot(context.Background(), provider.Snapshot{Provider: "codex", AccountID: "local", ObservedAt: now, OverageCredits: &provider.OverageCredits{Balance: "500"}}, store.InsertOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	msg := localRefresh(context.Background(), cfg, now)
+	if len(msg.errors) > 0 {
+		t.Fatal(msg.errors)
+	}
+	model := NewModel(cfg)
+	model.creditExpiry = msg.creditExpiry
+	model.overageCredits = msg.overageCredits
+	model.loading = false
+	view := model.View()
+	for _, want := range []string{"overage credits 500", "credit expiry (configured)", "configured grant Pro promo", "amount 500"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %s: %s", want, view)
+		}
+	}
+	if strings.Contains(view, "grant expired") {
+		t.Fatal("expired grant in TUI")
+	}
+}

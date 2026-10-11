@@ -51,6 +51,7 @@ type Model struct {
 	lastGood       time.Time
 	loading        bool
 	samples        []store.Sample
+	creditExpiry   map[string]*forecast.ConfiguredCreditCapacity
 	overageCredits map[string]*provider.OverageCredits
 	capacities     map[string]forecast.ResetCapacity
 	forecasts      []forecastRow
@@ -63,6 +64,7 @@ type Model struct {
 type tickMsg struct{}
 type refreshMsg struct {
 	samples        []store.Sample
+	creditExpiry   map[string]*forecast.ConfiguredCreditCapacity
 	overageCredits map[string]*provider.OverageCredits
 	capacities     map[string]forecast.ResetCapacity
 	forecasts      []forecastRow
@@ -152,6 +154,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshMsg:
 		m.loading = false
 		m.samples = msg.samples
+		m.creditExpiry = msg.creditExpiry
 		m.overageCredits = msg.overageCredits
 		m.capacities = msg.capacities
 		m.forecasts = msg.forecasts
@@ -364,6 +367,13 @@ func (m Model) renderUsage(layout usageLayout) string {
 		key := sample.Provider + "/" + sample.AccountID
 		grouped[key] = append(grouped[key], sample)
 	}
+	for key, c := range m.creditExpiry {
+		if c != nil {
+			if _, ok := grouped[key]; !ok {
+				grouped[key] = nil
+			}
+		}
+	}
 	for key, c := range m.overageCredits {
 		if c != nil {
 			if _, ok := grouped[key]; !ok {
@@ -413,6 +423,23 @@ func (m Model) renderUsage(layout usageLayout) string {
 			b.WriteString("\n  overage credits " + balance)
 			if c.OverageLimitReached {
 				b.WriteString(" · overage limit reached")
+			}
+		}
+		if c := m.creditExpiry[key]; c != nil {
+			if m.overageCredits[key] == nil {
+				b.WriteString("\n  overage credits unknown")
+			}
+			amount := "unknown"
+			if c.AmountExpiring != nil {
+				amount = fmt.Sprintf("%g", *c.AmountExpiring)
+			}
+			b.WriteString(fmt.Sprintf("\n  credit expiry (configured) %s · amount %s", c.NextExpiry.Local().Format("Jan 02 2006 15:04"), amount))
+			for _, g := range c.Grants {
+				amount := "unknown"
+				if g.Amount != nil {
+					amount = fmt.Sprintf("%g", *g.Amount)
+				}
+				b.WriteString(fmt.Sprintf("\n  configured grant %s · amount %s · expires %s", g.Label, amount, g.ExpiresAt.Local().Format("Jan 02 2006")))
 			}
 		}
 		b.WriteString("\n")
@@ -667,6 +694,7 @@ func localRefresh(ctx context.Context, cfg config.Config, now time.Time) refresh
 	pollStatus := map[string]accountPollStatus{}
 	capacities := map[string]forecast.ResetCapacity{}
 	overageCredits := map[string]*provider.OverageCredits{}
+	creditExpiry := map[string]*forecast.ConfiguredCreditCapacity{}
 
 	var samples []store.Sample
 	for _, acct := range cfg.Accounts {
@@ -676,6 +704,7 @@ func localRefresh(ctx context.Context, cfg config.Config, now time.Time) refresh
 		} else {
 			overageCredits[accountKey(acct.Provider, acct.ID)] = credits
 		}
+		creditExpiry[accountKey(acct.Provider, acct.ID)] = forecast.CreditExpiry(cfg.CreditGrants[acct.Provider], credits, now)
 		h, err := db.ResetHistory(ctx, acct.Provider, acct.ID)
 		if err != nil {
 			errors = append(errors, err.Error())
@@ -716,6 +745,7 @@ func localRefresh(ctx context.Context, cfg config.Config, now time.Time) refresh
 		samples:        samples,
 		capacities:     capacities,
 		overageCredits: overageCredits,
+		creditExpiry:   creditExpiry,
 		forecasts:      forecasts,
 		statuses:       pollStatus,
 		errors:         errors,
@@ -745,8 +775,12 @@ func remoteRefresh(ctx context.Context, cfg config.Config, now time.Time) refres
 		}
 		statuses[key] = status
 	}
+	creditExpiry := map[string]*forecast.ConfiguredCreditCapacity{}
+	for _, a := range cfg.Accounts {
+		creditExpiry[accountKey(a.Provider, a.ID)] = forecast.CreditExpiry(cfg.CreditGrants[a.Provider], nil, now)
+	}
 	latest := latestSampleTime(snapshot.Samples)
-	return refreshMsg{samples: snapshot.Samples, forecasts: forecasts, statuses: statuses, lastPoll: latest, lastGood: latest, dataSource: "openobserve"}
+	return refreshMsg{creditExpiry: creditExpiry, samples: snapshot.Samples, forecasts: forecasts, statuses: statuses, lastPoll: latest, lastGood: latest, dataSource: "openobserve"}
 }
 
 func latestPollStatus(ctx context.Context, db *store.Store, providerName, accountID string, now time.Time) (accountPollStatus, error) {
@@ -1256,6 +1290,11 @@ func max(a, b int) int {
 }
 
 func (m Model) hasCapacity() bool {
+	for _, c := range m.creditExpiry {
+		if c != nil {
+			return true
+		}
+	}
 	for _, c := range m.overageCredits {
 		if c != nil {
 			return true

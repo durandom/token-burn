@@ -16,6 +16,8 @@ pretending that provider internals are stable.
 - Find and verify a provider-owned source for Codex overage-credit expiry.
   `wham/usage.credits` provides balance and message estimates, but no verified
   expiry. Do not infer expiry from purchase dates or banked-reset expirations.
+  Manual `credit_grants` configuration is supported meanwhile and is explicitly
+  marked configured rather than API data.
 
 ## Discovered endpoints to investigate (TODO only)
 

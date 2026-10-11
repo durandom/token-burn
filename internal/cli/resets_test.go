@@ -106,3 +106,44 @@ func TestForecastOverageCapacitySeparateFromResets(t *testing.T) {
 		t.Fatal("capacity text missing balance")
 	}
 }
+
+func TestResetsCLIConfiguredGrantsBesideLiveBalance(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "usage.db")
+	cfgPath := filepath.Join(dir, "config.toml")
+	text := fmt.Sprintf("database_path=%q\n[credit_grants]\ncodex=[{label=\"Pro promo\",amount=62500,expires_at=\"2099-12-31\"},{label=\"expired promo\",amount=500,expires_at=\"2020-01-01\"}]\n[[accounts]]\nprovider=\"codex\"\nid=\"local\"\n", dbPath)
+	if err := os.WriteFile(cfgPath, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertSnapshot(context.Background(), provider.Snapshot{Provider: "codex", AccountID: "local", ObservedAt: time.Now(), OverageCredits: &provider.OverageCredits{Balance: "400.0000000000"}}, store.InsertOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		wants []string
+	}{{"text", nil, []string{"live overage credits: 400.0000000000", "credit expiry (configured)", "amount expiring=400", "Pro promo"}}, {"json", []string{"--json"}, []string{`"source": "configured"`, `"configured_amount": 62500`, `"amount_expiring": 400`, `"overage_credits"`}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := NewRootCommand(BuildInfo{})
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetArgs(append([]string{"--config", cfgPath, "resets"}, tc.args...))
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tc.wants {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("missing %s in %s", want, out.String())
+				}
+			}
+			if strings.Contains(out.String(), "expired promo") {
+				t.Fatal("expired grant shown")
+			}
+		})
+	}
+}

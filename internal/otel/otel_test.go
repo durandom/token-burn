@@ -244,6 +244,7 @@ func TestOverageGaugesSeparateFromResetMetrics(t *testing.T) {
 	}{
 		{"balance", &usageprovider.OverageCredits{Balance: "62750.0000000000", OverageLimitReached: true}, 62750, 1, 2},
 		{"zero", &usageprovider.OverageCredits{Balance: "0.0000000000"}, 0, 0, 2},
+		{"negative", &usageprovider.OverageCredits{Balance: "-10.5"}, -10.5, 0, 2},
 		{"unlimited", &usageprovider.OverageCredits{Unlimited: true}, 0, 0, 1},
 		{"unknown", nil, 0, 0, 0},
 	} {
@@ -262,6 +263,34 @@ func TestOverageGaugesSeparateFromResetMetrics(t *testing.T) {
 			for _, g := range recorder.gauges {
 				if len(g.attrs) != 2 || g.attrs["provider"] != "codex" || g.attrs["account_id"] != "local" {
 					t.Fatal("overage attribute cardinality")
+				}
+			}
+		})
+	}
+}
+
+func TestConfiguredCreditExpiryMetrics(t *testing.T) {
+	now := time.Date(2026, 10, 11, 10, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name  string
+		live  *usageprovider.OverageCredits
+		count int
+	}{{"known", &usageprovider.OverageCredits{Balance: "100"}, 2}, {"unknown", nil, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			capacity := forecast.CreditExpiry([]usageprovider.ConfiguredCreditGrant{{Label: "private label", Amount: 62500, ExpiresAt: now.Add(time.Hour)}}, tc.live, now)
+			recorder := &fakeRecorder{}
+			EmitSnapshot(context.Background(), recorder, usageprovider.Snapshot{Provider: "codex", AccountID: "local"}, now, capacity)
+			if len(recorder.gauges) != tc.count {
+				t.Fatalf("expiry gauges %d", len(recorder.gauges))
+			}
+			attrs := map[string]string{"provider": "codex", "account_id": "local", "source": "configured"}
+			assertGauge(t, recorder, MetricCreditSecondsToNextExpiry, 3600, attrs)
+			if tc.count == 2 {
+				assertGauge(t, recorder, MetricCreditAmountExpiring, 100, attrs)
+			}
+			for _, g := range recorder.gauges {
+				if len(g.attrs) != 3 {
+					t.Fatal("grant label must not be a metric attribute")
 				}
 			}
 		})

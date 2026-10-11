@@ -175,3 +175,9 @@ rows remain available through the store's `OverageCreditHistory` query.
 `forecast --json` exposes `overage_credits` alongside `reset_capacity`; the local
 TUI shows the latest balance, unlimited state, and overage-limit warning. No
 expiry field is synthesized.
+
+Manual `credit_grants` remain in XDG config rather than SQLite API observations.
+The read-only TUI, `forecast`, and `resets` overlay a
+`configured_credit_capacity` object with `source=configured`, active grants,
+next expiry, and the amount expiring capped at the nonnegative live balance.
+The original configured amount is retained separately from each independent cap.

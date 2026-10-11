@@ -160,7 +160,8 @@ stay in SQLite and are available through `resets --json`.
 
 - `token_burn_overage_credits_balance`: the numeric value of the Codex API's
   decimal credit balance, in provider credit units. Zero balances are exported;
-  missing, non-finite, invalid, or negative values are omitted. OTel's float
+  missing, non-finite, or invalid values are omitted. Negative balances reported
+  by the provider are retained. OTel's float
   conversion may round; SQLite retains the original decimal string.
 - `token_burn_overage_limit_reached`: `1` when the API reports the overage limit
   reached, otherwise `0` when a credit object is present.
@@ -168,4 +169,17 @@ stay in SQLite and are available through `resets --json`.
 Both gauges carry only `provider` and configured `account_id`. They are emitted
 from the existing usage poll; overage credits never contribute to reset-count
 metrics. An unlimited account without a numeric balance emits no balance sample.
-No expiry metric is emitted because no expiry source has been verified.
+No API expiry metric is emitted because no expiry source has been verified.
+
+## Configured credit expiry
+
+`token_burn_credit_seconds_to_next_expiry` reports seconds until the earliest
+unexpired manually configured credit grant. `token_burn_credit_amount_expiring`
+reports the sum configured for that expiry capped at the nonnegative live balance.
+Zero is valid; the amount gauge is omitted when no numeric balance is known.
+Expired grants produce no expiry sample.
+
+Both gauges carry `provider`, configured `account_id`, and the fixed
+`source=configured`. Labels and individual grant dates are never attributes.
+These metrics describe configured deadlines and caps, not verified API grant
+balances or an inferred consumption order.

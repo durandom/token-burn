@@ -111,8 +111,30 @@ additional endpoint is called for overage credits. They are stored per successfu
 usage observation, exported as balance and limit-reached gauges, and shown in
 the local TUI and `forecast` capacity output. Reset counts and burn-rate forecasts
 remain independent. The balance uses the provider's credit units; token-burn does
-not convert it to currency, tokens, or exact message counts. Expiry is unknown
-and requires endpoint research before it can be displayed.
+not convert it to currency, tokens, or exact message counts. API expiry is unknown.
+Manual expiry metadata can be configured in the XDG config:
+
+```toml
+[credit_grants]
+codex = [{ label = "Pro promo", amount = 62500, expires_at = "2026-12-31T23:59:59Z" }]
+```
+
+Each provider has its own list. Amounts must be positive and finite; expiry must
+be RFC3339 or a quoted date-only string, normalized to UTC. Date-only means
+23:59:59 UTC on that day. Grants are never added automatically or stored as API
+observations. TUI, forecast capacity, and the `resets` CLI mark them `configured`,
+ignore expired entries, and show the nearest expiry and amount expiring.
+Grants sharing that exact timestamp are grouped. Each grant's displayed amount
+and the nearest-expiry total are independently capped at the nonnegative live
+balance. No consumption order or remaining amount per grant is inferred; do not
+sum these independent caps. Without a numeric balance, capped amounts are unknown.
+Provider grants apply independently to every configured account for that provider.
+
+[OpenAI's credits help](https://help.openai.com/en/articles/12642688-using-credits-for-flexible-usage-in-chatgpt-personal-plans)
+states that purchased credits expire 12 months after purchase. Promotional grants
+can have different terms: the 62,500-credit Pro promo reported in
+[openai/codex #50931](https://github.com/openai/codex/issues/50931) expires December
+31, 2026. The example is manual metadata; users must check their own grant terms.
 
 ### Banked resets and weekly plan history
 

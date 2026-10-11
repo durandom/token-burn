@@ -3,6 +3,7 @@ package provider
 import (
 	"math"
 	"strconv"
+	"time"
 )
 
 // OverageCredits are spendable usage credits, independent of quota resets.
@@ -23,5 +24,12 @@ func (c *OverageCredits) NumericBalance() (float64, bool) {
 		return 0, false
 	}
 	value, err := strconv.ParseFloat(c.Balance, 64)
-	return value, err == nil && !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
+	return value, err == nil && !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+// ConfiguredCreditGrant is user-supplied expiry metadata, never API data.
+type ConfiguredCreditGrant struct {
+	Label     string    `json:"label"`
+	Amount    float64   `json:"amount"`
+	ExpiresAt time.Time `json:"expires_at"`
 }

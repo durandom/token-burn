@@ -322,7 +322,7 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 						result.Snapshots = append(result.Snapshots, snap)
 						opts.logSnapshot(snap, now)
 						if opts.Recorder != nil {
-							otel.EmitSnapshot(ctx, opts.Recorder, snap, now)
+							otel.EmitSnapshot(ctx, opts.Recorder, snap, now, forecast.CreditExpiry(opts.Config.CreditGrants[snap.Provider], snap.OverageCredits, now))
 							emitForecasts(ctx, opts.Recorder, db, snap, now)
 						}
 						continue
@@ -354,7 +354,7 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 		result.Snapshots = append(result.Snapshots, snap)
 		opts.logSnapshot(snap, now)
 		if opts.Recorder != nil {
-			otel.EmitSnapshot(ctx, opts.Recorder, snap, now)
+			otel.EmitSnapshot(ctx, opts.Recorder, snap, now, forecast.CreditExpiry(opts.Config.CreditGrants[snap.Provider], snap.OverageCredits, now))
 			emitForecasts(ctx, opts.Recorder, db, snap, now)
 		}
 	}
