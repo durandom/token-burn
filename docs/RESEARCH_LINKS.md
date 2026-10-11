@@ -125,3 +125,21 @@ libraries. `token-burn` does not import OpenUsage internals.
   https://docs.rs/rusqlite/
 - Rust `opentelemetry-otlp`, if Rust is reconsidered:
   https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/
+
+
+## Reset credits and programs (verified 2026-10-11)
+
+- [CLIProxyAPI #6507](https://github.com/router-for-me/CLIProxyAPI/issues/6507):
+  Claude weekly `juniper_tide` status query and CLI surface header; distinguishes
+  it from the `cedar_ember` grant program.
+- [openai/codex #29618](https://github.com/openai/codex/issues/29618):
+  detailed reset-credit visibility, grant times and expirations.
+- [aaamosh/codex-reset](https://github.com/aaamosh/codex-reset):
+  Codex banked-credit endpoint and authentication reference. Its redemption
+  feature is outside token-burn's read-only scope.
+
+Live endpoint discovery confirmed Codex `wham/rate-limit-reset-credits`, paged
+`wham/rate-limit-reset-credits/history`, and
+`wham/usage/plan_limit_history?days=7` with the normal Codex bearer/account header.
+Claude usage with `?at_wall=1&skip_spend=1` and the Claude CLI User-Agent exposes
+`cedar_ember` and `juniper_tide`. No browser is required by token-burn.

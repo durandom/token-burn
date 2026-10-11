@@ -278,6 +278,13 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 			opts.logf("%s/%s rate-limited: skipping poll, cooldown remaining=%s", acct.Provider, acct.ID, cooldownRemaining.Round(time.Second))
 			continue
 		}
+		if acct.Provider == "codex" {
+			var err error
+			acct.ResetDetailsAfter, err = db.ResetDetailsAfter(ctx, acct.Provider, acct.ID)
+			if err != nil {
+				return result, err
+			}
+		}
 		client, ok := opts.providerFor(acct.Provider)
 		if !ok {
 			pollErr := PollError{
@@ -309,6 +316,9 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 						if err := recordPollSuccess(ctx, db, snap.Provider, snap.AccountID, startedAt, opts.now()); err != nil {
 							return result, err
 						}
+						if err := db.EnrichResetSnapshot(ctx, &snap); err != nil {
+							return result, err
+						}
 						result.Snapshots = append(result.Snapshots, snap)
 						opts.logSnapshot(snap, now)
 						if opts.Recorder != nil {
@@ -338,6 +348,9 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 		if err := recordPollSuccess(ctx, db, snap.Provider, snap.AccountID, startedAt, opts.now()); err != nil {
 			return result, err
 		}
+		if err := db.EnrichResetSnapshot(ctx, &snap); err != nil {
+			return result, err
+		}
 		result.Snapshots = append(result.Snapshots, snap)
 		opts.logSnapshot(snap, now)
 		if opts.Recorder != nil {
@@ -359,6 +372,8 @@ func fetchAccount(ctx context.Context, timeout time.Duration, client usageprovid
 		ID:                acct.ID,
 		ProviderAccountID: acct.ProviderAccountID,
 		AuthFile:          acct.AuthFile,
+		ClaudeCLIVersion:  acct.ClaudeCLIVersion,
+		ResetDetailsAfter: acct.ResetDetailsAfter,
 		CredentialsFile:   acct.CredentialsFile,
 	})
 }

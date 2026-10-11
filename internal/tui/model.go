@@ -50,6 +50,7 @@ type Model struct {
 	lastGood    time.Time
 	loading     bool
 	samples     []store.Sample
+	capacities  map[string]forecast.ResetCapacity
 	forecasts   []forecastRow
 	statuses    map[string]accountPollStatus
 	errors      []string
@@ -60,6 +61,7 @@ type Model struct {
 type tickMsg struct{}
 type refreshMsg struct {
 	samples     []store.Sample
+	capacities  map[string]forecast.ResetCapacity
 	forecasts   []forecastRow
 	statuses    map[string]accountPollStatus
 	errors      []string
@@ -147,6 +149,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshMsg:
 		m.loading = false
 		m.samples = msg.samples
+		m.capacities = msg.capacities
 		m.forecasts = msg.forecasts
 		m.statuses = msg.statuses
 		m.errors = msg.errors
@@ -194,7 +197,7 @@ func (m Model) View() string {
 		b.WriteString("\n\n")
 	}
 
-	if len(m.samples) == 0 {
+	if len(m.samples) == 0 && !m.hasResetCapacity() {
 		prefix := b.String()
 		empty := panelAtWidth(st.panel, m.width).Render(st.subtle.Render("No samples yet."))
 		if m.height > 0 {
@@ -357,6 +360,13 @@ func (m Model) renderUsage(layout usageLayout) string {
 		key := sample.Provider + "/" + sample.AccountID
 		grouped[key] = append(grouped[key], sample)
 	}
+	for key, c := range m.capacities {
+		if c.OwnedResets != nil {
+			if _, ok := grouped[key]; !ok {
+				grouped[key] = nil
+			}
+		}
+	}
 	forecasts := map[string]forecastRow{}
 	for _, row := range m.forecasts {
 		forecasts[forecastKey(row.Provider, row.Account, row.Window)] = row
@@ -371,6 +381,17 @@ func (m Model) renderUsage(layout usageLayout) string {
 		now := time.Now()
 		status := m.statuses[key]
 		b.WriteString(renderAccountHeader(m.styles, key, rows, status, now))
+		if c, ok := m.capacities[key]; ok && c.OwnedResets != nil {
+			expiry := "unknown"
+			used := "unknown"
+			if c.NextExpiry != nil {
+				expiry = c.NextExpiry.Local().Format("Jan 02 15:04")
+			}
+			if c.LastUsed != nil {
+				used = c.LastUsed.Local().Format("Jan 02 15:04")
+			}
+			b.WriteString(fmt.Sprintf("\n  resets owned %d · next expiry %s · last used %s", *c.OwnedResets, expiry, used))
+		}
 		b.WriteString("\n")
 		for _, row := range rows {
 			forecastRow, ok := forecasts[forecastKey(row.Provider, row.AccountID, row.WindowName)]
@@ -621,9 +642,16 @@ func localRefresh(ctx context.Context, cfg config.Config, now time.Time) refresh
 
 	var errors []string
 	pollStatus := map[string]accountPollStatus{}
+	capacities := map[string]forecast.ResetCapacity{}
 
 	var samples []store.Sample
 	for _, acct := range cfg.Accounts {
+		h, err := db.ResetHistory(ctx, acct.Provider, acct.ID)
+		if err != nil {
+			errors = append(errors, err.Error())
+		} else {
+			capacities[accountKey(acct.Provider, acct.ID)] = forecast.Capacity(h.Summary, h.Credits, h.Events, now)
+		}
 		status, err := latestPollStatus(ctx, db, acct.Provider, acct.ID, now)
 		if err != nil {
 			errors = append(errors, err.Error())
@@ -656,6 +684,7 @@ func localRefresh(ctx context.Context, cfg config.Config, now time.Time) refresh
 	}
 	return refreshMsg{
 		samples:     samples,
+		capacities:  capacities,
 		forecasts:   forecasts,
 		statuses:    pollStatus,
 		errors:      errors,
@@ -1193,4 +1222,13 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (m Model) hasResetCapacity() bool {
+	for _, c := range m.capacities {
+		if c.OwnedResets != nil {
+			return true
+		}
+	}
+	return false
 }

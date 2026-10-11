@@ -11,6 +11,18 @@ pretending that provider internals are stable.
 - Better terminal layout behavior for very narrow terminals.
 - More fixtures for provider response shape drift.
 
+## Discovered endpoints to investigate (TODO only)
+
+The 2026-10-11 discovery found these additional read endpoints. Their payloads,
+auth requirements, polling cost, and usefulness still need evaluation before
+implementation:
+
+- `wham/usage/credit-usage-events`
+- `wham/usage/daily-token-usage-breakdown`
+- `wham/usage/chatpass/apps`
+- `wham/analytics/daily-*`
+- `pageConfigs/usage_limits`
+
 ## Medium Term
 
 - Windows viability check.

@@ -97,12 +97,43 @@ Relevant fields:
 - The endpoint is not a public OpenAI Platform API and may change.
 - Different OpenAI UI surfaces may disagree during reset propagation windows.
 
+### Banked resets and weekly plan history
+
+The usage response's `rate_limit_reset_credits` summary provides the owned and
+plan-applicable counts on each poll. When that field is present, token-burn also
+reads these endpoints with the same bearer token and account header:
+
+```text
+GET /wham/rate-limit-reset-credits
+GET /wham/rate-limit-reset-credits/history[?cursor=...]
+GET /wham/usage/plan_limit_history?days=7
+```
+
+Detail requests run at most once per 15 minutes per account in the daemon. The
+attempt deadline is stored in SQLite, so restarts and failed requests preserve
+the cadence. A standalone `once` command reads an existing deadline; use
+`once --store` to persist new observations and deadlines. Optional detail errors
+are stored and exposed by `resets`, while current usage remains available.
+
+Credits retain scope, plan support, status, grant/expiry/redemption times, title,
+and description. History follows `next_cursor` until exhausted (bounded to 100
+pages and the request context deadline), storing granted/used events by API ID.
+An incomplete history traversal is reported as a detail warning; fetched events
+remain useful and are upserted on the next traversal.
+
+Plan periods retain basis points (100 basis points = 1%), completeness, plan,
+start/end times, and all breakdown dimensions/rows, plus coverage and approximate
+accounting metadata. Historical periods accumulate through upserts.
+
+Reset discovery is read-only: token-burn never calls
+`/wham/rate-limit-reset-credits/consume` or any redemption endpoint.
+
 ## Claude Code
 
 ### Endpoint
 
 ```text
-GET https://api.anthropic.com/api/oauth/usage
+GET https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1
 ```
 
 ### Headers
@@ -111,8 +142,33 @@ GET https://api.anthropic.com/api/oauth/usage
 Authorization: Bearer <oauth_access_token>
 anthropic-beta: oauth-2025-04-20
 Content-Type: application/json
-User-Agent: token-burn
+User-Agent: claude-cli/<version> (external, cli)
 ```
+
+### Reset programs
+
+`cedar_ember` grants provide reset totals/remaining counts, start/end times,
+limit scope, pause/usability flags, and program eligibility/cooldown metadata.
+`juniper_tide` is a separate weekly reset program; its eligibility, arm,
+availability, next availability, weekly reset time, and resets-per-week fields
+are retained as metadata and visible with `resets --json`. It is not added to the
+owned grant count, because availability in that program is not a banked credit.
+
+Set `claude_cli_version = "2.1.280"` in a Claude `[[accounts]]` entry to override
+the default `2.1.280` User-Agent version. No Claude executable is launched to
+obtain the version. The CLI surface header matters: other surfaces can return
+`ineligible_reason: "surface"` and empty grants. Such responses do not clear
+previously stored grants or infer a use.
+
+Claude exposes no redemption timestamp. A drop in `resets_left` for the same
+grant across consecutive stored observations records a `used` event at the new
+observation's UTC time, with `source=inferred` and the number of resets consumed.
+The grant start time supplies the `granted` event with `source=api`. Poll gaps
+limit the precision of observed use times; uses before the first observation
+cannot be reconstructed. Missing grants change availability without implying use.
+
+The provider only reads usage; it never calls
+`/api/organizations/{org}/reset_rate_limits`.
 
 ### Credential Sources
 

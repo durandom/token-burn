@@ -34,6 +34,8 @@ token_burn_usage_remaining_percent
 token_burn_usage_reset_unix_seconds
 token_burn_usage_seconds_to_reset
 token_burn_usage_window_seconds
+token_burn_resets_available
+token_burn_resets_seconds_to_next_expiry
 token_burn_forecast_burn_rate_percent_per_hour
 token_burn_forecast_projected_reset_percent
 token_burn_forecast_estimated_90_unix_seconds
@@ -135,3 +137,21 @@ names. Direct values take precedence.
 In `auto` mode, fresh local SQLite samples win. OpenObserve is queried when the
 local database cannot be opened, is empty, or its latest samples are stale. Use
 `openobserve` to force remote reads, or `sqlite` to disable them.
+
+
+## Reset capacity gauges
+
+- `token_burn_resets_available`: owned banked resets (sum of `resets_left` for
+  available Claude grants; Codex's live available count). Zero is exported when
+  the API reports zero; unknown/unsupported counts produce no sample.
+- `token_burn_resets_seconds_to_next_expiry`: seconds until the earliest future
+  expiry among owned available credits. Emitted only when an expiry is known and
+  the owned count is nonzero. Expired or used credits do not supply an expiry.
+
+Both gauges carry only `provider` and configured `account_id`. They never carry
+email, credit/grant IDs, event IDs, plan-period IDs, or a per-window attribute.
+The daemon enriches usage snapshots from SQLite during slow-detail poll gaps,
+so the available gauge refreshes with usage and expiry seconds decrease between
+detail polls. Consumers should treat a missing expiry sample as unknown rather
+than carry it forward indefinitely. Historical reset events and plan breakdowns
+stay in SQLite and are available through `resets --json`.

@@ -198,3 +198,38 @@ func assertGauge(t *testing.T, recorder *fakeRecorder, name string, value float6
 	}
 	t.Fatalf("missing gauge %s=%v in %#v", name, value, recorder.gauges)
 }
+
+func TestResetMetricsLowCardinality(t *testing.T) {
+	now := time.Date(2026, 10, 11, 10, 0, 0, 0, time.UTC)
+	recorder := &fakeRecorder{}
+	EmitSnapshot(context.Background(), recorder, usageprovider.Snapshot{Provider: "codex", AccountID: "local", Resets: &usageprovider.ResetSummary{AvailableCount: 2}, ResetDetails: &usageprovider.ResetDetails{Credits: []usageprovider.ResetCredit{{ID: "fake-credit", Status: "available", ResetsLeft: 1, ExpiresAt: &usageprovider.Timestamp{Time: now.Add(time.Hour)}}}}}, now)
+	attrs := map[string]string{"provider": "codex", "account_id": "local"}
+	assertGauge(t, recorder, MetricResetsAvailable, 2, attrs)
+	assertGauge(t, recorder, MetricResetsSecondsToNextExpiry, 3600, attrs)
+	for _, g := range recorder.gauges {
+		for key := range g.attrs {
+			if key == "credit_id" || key == "email" || key == "window" {
+				t.Fatal("unexpected reset metric attribute")
+			}
+		}
+	}
+}
+
+func TestResetMetricZeroAndUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		summary *usageprovider.ResetSummary
+		want    int
+	}{{"zero", &usageprovider.ResetSummary{}, 1}, {"unknown", nil, 0}} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &fakeRecorder{}
+			EmitSnapshot(context.Background(), recorder, usageprovider.Snapshot{Provider: "claude", AccountID: "local", Resets: tc.summary}, time.Now())
+			if len(recorder.gauges) != tc.want {
+				t.Fatalf("reset gauges = %d", len(recorder.gauges))
+			}
+			if tc.want == 1 {
+				assertGauge(t, recorder, MetricResetsAvailable, 0, nil)
+			}
+		})
+	}
+}

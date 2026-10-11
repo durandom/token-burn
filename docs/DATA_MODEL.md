@@ -130,3 +130,33 @@ Suggested defaults:
 - keep forecasts for 90 days
 
 Retention should run once per daemon start and then daily.
+
+
+## Reset credits and plan-limit history (migration 3)
+
+Reset data is inserted atomically with usage snapshots, even when a snapshot has
+no quota windows. All timestamp columns contain UTC RFC3339 values.
+
+| Table | Key | Stored data |
+| --- | --- | --- |
+| `reset_credits` | provider, account_id, id | status, granted_at, expires_at, redeemed_at, observed_at; normalized credit JSON with scope, counts, and usability flags |
+| `reset_events` | provider, account_id, id | credit_id, kind (`granted`/`used`), occurred_at, source (`api`/`inferred`); normalized JSON includes event count |
+| `plan_limit_periods` | provider, account_id, id | starts_at, ends_at; normalized JSON with plan, window_minutes, accounting_complete, used_basis_points and breakdowns |
+| `reset_state` | provider, account_id | latest summary/program metadata, plan coverage metadata, detail attempt time, errors and observed_at |
+
+IDs are upsert keys within an account, never telemetry attributes. Duplicate API
+events are idempotent; inferred use IDs include the grant ID and observation
+time. Repeated or older snapshots cannot infer duplicate Claude uses. Missing
+credits in a complete list become `unavailable`; historical credits/events remain.
+A partial or failed list leaves known credits intact. Credits from older
+snapshots cannot overwrite newer credit observations.
+
+Normalized JSON and program metadata always pass through the secret redactor.
+These fields are part of the data model and do not require `--raw-json`.
+
+`token-burn resets [--provider codex|claude] [--account <id>] [--json]` reads the
+local store only. Text lists credits, grant/use events, and plan periods; JSON
+also includes program flags, breakdowns, coverage, polling errors, and the detail
+attempt time. The TUI reads owned resets, next expiry, and last use from SQLite.
+`forecast` includes reset capacity when known, without assuming redemption in
+its burn-rate projection. Unknown counts stay unknown rather than becoming zero.

@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS daemon_state (
 );
 `,
 	},
+	{version: 3, sql: resetSchema},
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -304,6 +305,9 @@ INSERT OR IGNORE INTO live_usage_samples (
 		}
 	}
 
+	if err := insertResets(ctx, tx, snap); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit insert snapshot: %w", err)
 	}

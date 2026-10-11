@@ -23,15 +23,16 @@ const (
 )
 
 type Provider struct {
-	HTTPClient      *http.Client
-	BaseURL         string
-	RefreshURL      string
-	Now             func() time.Time
-	HomeDir         func() (string, error)
-	Env             func(string) string
-	KeychainToken   func() (string, error)
-	KeychainAccount func() (string, error)
-	KeychainWrite   func(account, secret string) error
+	ClaudeCLIVersion string
+	HTTPClient       *http.Client
+	BaseURL          string
+	RefreshURL       string
+	Now              func() time.Time
+	HomeDir          func() (string, error)
+	Env              func(string) string
+	KeychainToken    func() (string, error)
+	KeychainAccount  func() (string, error)
+	KeychainWrite    func(account, secret string) error
 }
 
 func New() *Provider {
@@ -44,6 +45,7 @@ func (p *Provider) ID() string {
 
 func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usageprovider.Snapshot, error) {
 	observedAt := p.now()
+	version := firstNonEmpty(acct.ClaudeCLIVersion, p.ClaudeCLIVersion, "2.1.280")
 
 	creds := p.collectCredentials(acct)
 	if len(creds) == 0 {
@@ -63,7 +65,7 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 	var lastErr error
 	var tried []string
 	for _, cred := range creds {
-		payload, err := p.fetchWithCredential(ctx, cred, observedAt)
+		payload, err := p.fetchWithCredential(ctx, cred, observedAt, version)
 		if err == nil {
 			return mapUsageResponse(payload, acct, observedAt), nil
 		}
@@ -83,7 +85,7 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 	// read, and never for an explicit CLAUDE_CODE_OAUTH_TOKEN override.
 	if creds[0].source.kind != sourceEnv {
 		if cred, ok := p.keychainCredential(); ok {
-			payload, err := p.fetchWithCredential(ctx, cred, observedAt)
+			payload, err := p.fetchWithCredential(ctx, cred, observedAt, version)
 			if err == nil {
 				return mapUsageResponse(payload, acct, observedAt), nil
 			}
@@ -112,7 +114,7 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 // it when due. The raw error is returned so the caller can decide whether the
 // failure disqualifies only this credential (auth expired) or the whole poll
 // (rate limit, outage, malformed response).
-func (p *Provider) fetchWithCredential(ctx context.Context, cred credential, observedAt time.Time) (usageResponse, error) {
+func (p *Provider) fetchWithCredential(ctx context.Context, cred credential, observedAt time.Time, version string) (usageResponse, error) {
 	// Refresh ahead of expiry when the stored login says it is due. Claude Code
 	// normally keeps its own token fresh, so this only matters while it sits
 	// idle - which is exactly when an unattended monitor would otherwise go
@@ -136,26 +138,26 @@ func (p *Provider) fetchWithCredential(ctx context.Context, cred credential, obs
 		// the current one is good for this poll.
 	}
 
-	payload, err := p.fetchUsage(ctx, cred.Access)
+	payload, err := p.fetchUsage(ctx, cred.Access, version)
 	if err != nil && isAuthExpired(err) && cred.canRefresh() && !attemptedRefresh {
 		rotated, refreshErr := p.refreshCredential(ctx, cred, observedAt)
 		if refreshErr == nil {
 			cred = rotated
-			payload, err = p.fetchUsage(ctx, cred.Access)
+			payload, err = p.fetchUsage(ctx, cred.Access, version)
 		}
 	}
 	return payload, err
 }
 
-func (p *Provider) fetchUsage(ctx context.Context, token string) (usageResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.baseURL(), "/")+"/usage", nil)
+func (p *Provider) fetchUsage(ctx context.Context, token, version string) (usageResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.baseURL(), "/")+"/usage?at_wall=1&skip_spend=1", nil)
 	if err != nil {
 		return usageResponse{}, fmt.Errorf("claude create usage request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "token-burn")
+	req.Header.Set("User-Agent", "claude-cli/"+version+" (external, cli)")
 
 	resp, err := p.httpClient().Do(req)
 	if err != nil {
@@ -190,7 +192,7 @@ func (p *Provider) fetchUsage(ctx context.Context, token string) (usageResponse,
 			Code:       usageprovider.ErrTransientHTTPFailure,
 			Provider:   id,
 			HTTPStatus: resp.StatusCode,
-			Err:        fmt.Errorf("unexpected status: %s", truncate(string(body), 256)),
+			Err:        errors.New("unexpected usage response status"),
 		}
 	}
 
@@ -301,6 +303,7 @@ func mapUsageResponse(payload usageResponse, acct usageprovider.Account, observe
 	addBucket(&snap, "extra_usage", payload.ExtraUsage)
 	addScopedLimits(&snap, payload.Limits)
 
+	mapResetProgram(&snap, payload)
 	return snap
 }
 

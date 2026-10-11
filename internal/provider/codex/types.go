@@ -1,5 +1,7 @@
 package codex
 
+import "github.com/durandom/token-burn/internal/provider"
+
 type authFile struct {
 	AccountID string     `json:"account_id,omitempty"`
 	Tokens    authTokens `json:"tokens"`
@@ -11,6 +13,7 @@ type authTokens struct {
 }
 
 type usagePayload struct {
+	ResetCredits         *provider.ResetSummary `json:"rate_limit_reset_credits"`
 	UserID               string                 `json:"user_id,omitempty"`
 	AccountID            string                 `json:"account_id,omitempty"`
 	Email                string                 `json:"email,omitempty"`

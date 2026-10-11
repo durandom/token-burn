@@ -875,3 +875,19 @@ func testConfig(t *testing.T) config.Config {
 		Accounts:     []config.Account{{Provider: "codex", ID: "codex-default"}},
 	}
 }
+
+func TestViewRendersStoredResetCapacityWithoutUsageWindows(t *testing.T) {
+	cfg := testConfig(t)
+	model := NewModel(cfg)
+	owned := 2
+	expiry := time.Now().Add(time.Hour)
+	used := time.Now().Add(-time.Hour)
+	model.capacities = map[string]forecast.ResetCapacity{"codex/local": {OwnedResets: &owned, NextExpiry: &expiry, LastUsed: &used}}
+	model.loading = false
+	view := model.View()
+	for _, want := range []string{"codex/local", "resets owned 2", "next expiry", "last used"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q: %s", want, view)
+		}
+	}
+}

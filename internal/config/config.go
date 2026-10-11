@@ -68,11 +68,13 @@ type OTelReadConfig struct {
 }
 
 type Account struct {
-	Provider          string `toml:"provider"`
-	ID                string `toml:"id"`
-	ProviderAccountID string `toml:"provider_account_id"`
-	AuthFile          string `toml:"auth_file"`
-	CredentialsFile   string `toml:"credentials_file"`
+	Provider          string     `toml:"provider"`
+	ID                string     `toml:"id"`
+	ProviderAccountID string     `toml:"provider_account_id"`
+	AuthFile          string     `toml:"auth_file"`
+	ClaudeCLIVersion  string     `toml:"claude_cli_version"`
+	ResetDetailsAfter *time.Time `toml:"-"`
+	CredentialsFile   string     `toml:"credentials_file"`
 }
 
 type fileConfig struct {

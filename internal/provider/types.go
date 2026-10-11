@@ -16,17 +16,24 @@ type Account struct {
 	Alias             string
 	ProviderAccountID string
 	AuthFile          string
+	ResetDetailsAfter *time.Time
+	ClaudeCLIVersion  string
 	CredentialsFile   string
 }
 
 type Snapshot struct {
-	Provider   string
-	AccountID  string
-	PlanType   string
-	Source     string
-	ObservedAt time.Time
-	Windows    []Window
-	Raw        map[string]any
+	Provider                string
+	AccountID               string
+	PlanType                string
+	Source                  string
+	ObservedAt              time.Time
+	Windows                 []Window
+	Resets                  *ResetSummary
+	ResetDetails            *ResetDetails
+	ResetDetailsAttemptedAt *time.Time
+	ResetDetailsErrors      []string
+	PlanLimitHistory        *PlanLimitHistory
+	Raw                     map[string]any
 }
 
 type Window struct {

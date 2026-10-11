@@ -14,7 +14,7 @@ func TestOpenMigratesSchema(t *testing.T) {
 	store := openTestStore(t, ctx)
 	defer store.Close()
 
-	for _, version := range []int{1, 2} {
+	for _, version := range []int{1, 2, 3} {
 		var count int
 		err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version = ?", version).Scan(&count)
 		if err != nil {

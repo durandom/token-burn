@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/durandom/token-burn/internal/oauthrefresh"
@@ -37,6 +38,8 @@ type Provider struct {
 	Now             func() time.Time
 	HomeDir         func() (string, error)
 	Env             func(string) string
+	resetMu         sync.Mutex
+	resetNext       map[string]time.Time
 	refreshFailures oauthrefresh.FailureCache
 }
 
@@ -70,7 +73,11 @@ func (p *Provider) Fetch(ctx context.Context, acct usageprovider.Account) (usage
 	if err != nil {
 		return usageprovider.Snapshot{}, err
 	}
-	return mapUsagePayload(payload, acct, observedAt)
+	snap, err := mapUsagePayload(payload, acct, observedAt)
+	if err == nil && payload.ResetCredits != nil {
+		p.fetchResetDetails(ctx, credential, acct, &snap)
+	}
+	return snap, err
 }
 
 func (p *Provider) fetchUsage(ctx context.Context, credential resolvedCredential) (usagePayload, error) {
@@ -331,6 +338,7 @@ func mapUsagePayload(payload usagePayload, acct usageprovider.Account, observedA
 	}
 
 	snap := usageprovider.Snapshot{
+		Resets:     payload.ResetCredits,
 		Provider:   id,
 		AccountID:  acct.ID,
 		PlanType:   planType,

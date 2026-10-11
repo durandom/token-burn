@@ -65,6 +65,7 @@ func NewRootCommand(build BuildInfo) *cobra.Command {
 	root.AddCommand(newOnceCommand(&configPath, &verbose))
 	root.AddCommand(newStatusCommand(&configPath))
 	root.AddCommand(newHistoryCommand(&configPath))
+	root.AddCommand(newResetsCommand(&configPath))
 	root.AddCommand(newForecastCommand(&configPath))
 	root.AddCommand(newDaemonCommand(&configPath, &verbose))
 	root.AddCommand(newInstallCommand(&configPath))
@@ -667,6 +668,9 @@ func newForecastCommand(configPath *string) *cobra.Command {
 				return err
 			}
 			results := forecastSamples(samples, now)
+			if err := attachResetCapacity(ctx, cfg, results, now); err != nil {
+				return err
+			}
 			if jsonOut {
 				return writeJSON(cmd.OutOrStdout(), results)
 			}
@@ -740,22 +744,31 @@ type commandError struct {
 }
 
 type forecastOutput struct {
-	Provider                 string     `json:"provider"`
-	AccountID                string     `json:"account_id"`
-	WindowName               string     `json:"window_name"`
-	ResetAt                  *time.Time `json:"reset_at,omitempty"`
-	ComputedAt               time.Time  `json:"computed_at"`
-	SampleCount              int        `json:"sample_count"`
-	BurnRatePercentPerHour   *float64   `json:"burn_rate_percent_per_hour,omitempty"`
-	ProjectedResetPercent    *float64   `json:"projected_reset_percent,omitempty"`
-	Estimated90At            *time.Time `json:"estimated_90_at,omitempty"`
-	Estimated100At           *time.Time `json:"estimated_100_at,omitempty"`
-	Confidence               float64    `json:"confidence"`
-	InsufficientDataReason   string     `json:"insufficient_data_reason,omitempty"`
-	StableWindowObservedFrom *time.Time `json:"stable_window_observed_from,omitempty"`
+	Provider                 string                  `json:"provider"`
+	AccountID                string                  `json:"account_id"`
+	WindowName               string                  `json:"window_name"`
+	ResetAt                  *time.Time              `json:"reset_at,omitempty"`
+	ComputedAt               time.Time               `json:"computed_at"`
+	SampleCount              int                     `json:"sample_count"`
+	BurnRatePercentPerHour   *float64                `json:"burn_rate_percent_per_hour,omitempty"`
+	ProjectedResetPercent    *float64                `json:"projected_reset_percent,omitempty"`
+	Estimated90At            *time.Time              `json:"estimated_90_at,omitempty"`
+	Estimated100At           *time.Time              `json:"estimated_100_at,omitempty"`
+	Confidence               float64                 `json:"confidence"`
+	InsufficientDataReason   string                  `json:"insufficient_data_reason,omitempty"`
+	StableWindowObservedFrom *time.Time              `json:"stable_window_observed_from,omitempty"`
+	ResetCapacity            *forecast.ResetCapacity `json:"reset_capacity,omitempty"`
 }
 
 func runOnce(ctx context.Context, cfg config.Config, diag io.Writer) onceResult {
+	var db *store.Store
+	_, dbErr := os.Stat(cfg.DatabasePath)
+	if dbErr == nil {
+		db, dbErr = store.Open(ctx, cfg.DatabasePath)
+	}
+	if dbErr == nil {
+		defer db.Close()
+	}
 	result := onceResult{
 		Snapshots: []usageprovider.Snapshot{},
 		Errors:    []commandError{},
@@ -776,12 +789,17 @@ func runOnce(ctx context.Context, cfg config.Config, diag io.Writer) onceResult 
 			})
 			continue
 		}
+		if dbErr == nil && acct.Provider == "codex" {
+			acct.ResetDetailsAfter, _ = db.ResetDetailsAfter(ctx, acct.Provider, acct.ID)
+		}
 		started := time.Now()
 		snap, err := client.Fetch(ctx, usageprovider.Account{
 			Provider:          acct.Provider,
 			ID:                acct.ID,
 			ProviderAccountID: acct.ProviderAccountID,
 			AuthFile:          acct.AuthFile,
+			ClaudeCLIVersion:  acct.ClaudeCLIVersion,
+			ResetDetailsAfter: acct.ResetDetailsAfter,
 			CredentialsFile:   acct.CredentialsFile,
 		})
 		elapsed := time.Since(started)
@@ -981,6 +999,9 @@ func printForecastText(w io.Writer, results []forecastOutput) {
 		}
 		if result.Estimated100At != nil {
 			fmt.Fprintf(w, " 100%% at %s", result.Estimated100At.Local().Format(time.RFC3339))
+		}
+		if c := result.ResetCapacity; c != nil && c.OwnedResets != nil {
+			fmt.Fprintf(w, " resets owned %d next expiry %s", *c.OwnedResets, localResetTime(c.NextExpiry))
 		}
 		if result.InsufficientDataReason != "" {
 			fmt.Fprintf(w, " (%s)", result.InsufficientDataReason)

@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	MetricResetsAvailable               = "token_burn_resets_available"
+	MetricResetsSecondsToNextExpiry     = "token_burn_resets_seconds_to_next_expiry"
 	MetricUsageUsedPercent              = "token_burn_usage_used_percent"
 	MetricUsageRemainingPercent         = "token_burn_usage_remaining_percent"
 	MetricUsageResetUnixSeconds         = "token_burn_usage_reset_unix_seconds"
@@ -122,6 +124,21 @@ func (e *Exporter) AddCounter(ctx context.Context, name string, value int64, att
 }
 
 func EmitSnapshot(ctx context.Context, recorder Recorder, snap usageprovider.Snapshot, now time.Time) {
+	var credits []usageprovider.ResetCredit
+	var events []usageprovider.ResetEvent
+	if snap.ResetDetails != nil {
+		credits = snap.ResetDetails.Credits
+		events = snap.ResetDetails.Events
+	}
+	capacity := forecast.Capacity(snap.Resets, credits, events, now)
+	attrs := []attribute.KeyValue{attribute.String("provider", snap.Provider), attribute.String("account_id", snap.AccountID)}
+	if capacity.OwnedResets != nil {
+		recorder.RecordGauge(ctx, MetricResetsAvailable, float64(*capacity.OwnedResets), attrs...)
+	}
+	if capacity.NextExpiry != nil {
+		recorder.RecordGauge(ctx, MetricResetsSecondsToNextExpiry, capacity.NextExpiry.Sub(now.UTC()).Seconds(), attrs...)
+	}
+
 	for _, win := range snap.Windows {
 		attrs := usageAttrs(snap, win)
 		recorder.RecordGauge(ctx, MetricUsageUsedPercent, win.UsedPercent, attrs...)
