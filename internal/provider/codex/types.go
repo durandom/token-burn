@@ -13,24 +13,24 @@ type authTokens struct {
 }
 
 type usagePayload struct {
-	ResetCredits         *provider.ResetSummary `json:"rate_limit_reset_credits"`
-	UserID               string                 `json:"user_id,omitempty"`
-	AccountID            string                 `json:"account_id,omitempty"`
-	Email                string                 `json:"email,omitempty"`
-	PlanType             string                 `json:"plan_type,omitempty"`
-	RateLimit            *usageLimitDetails     `json:"rate_limit,omitempty"`
-	CodeReviewRateLimit  *usageLimitDetails     `json:"code_review_rate_limit,omitempty"`
-	AdditionalRateLimits []usageAdditionalLimit `json:"additional_rate_limits,omitempty"`
-	Credits              any                    `json:"credits,omitempty"`
-	RateLimitStatus      *usageRateLimitStatus  `json:"rate_limit_status,omitempty"`
+	ResetCredits         *provider.ResetSummary   `json:"rate_limit_reset_credits"`
+	UserID               string                   `json:"user_id,omitempty"`
+	AccountID            string                   `json:"account_id,omitempty"`
+	Email                string                   `json:"email,omitempty"`
+	PlanType             string                   `json:"plan_type,omitempty"`
+	RateLimit            *usageLimitDetails       `json:"rate_limit,omitempty"`
+	CodeReviewRateLimit  *usageLimitDetails       `json:"code_review_rate_limit,omitempty"`
+	AdditionalRateLimits []usageAdditionalLimit   `json:"additional_rate_limits,omitempty"`
+	Credits              *provider.OverageCredits `json:"credits,omitempty"`
+	RateLimitStatus      *usageRateLimitStatus    `json:"rate_limit_status,omitempty"`
 }
 
 type usageRateLimitStatus struct {
-	PlanType             string                 `json:"plan_type,omitempty"`
-	RateLimit            *usageLimitDetails     `json:"rate_limit,omitempty"`
-	CodeReviewRateLimit  *usageLimitDetails     `json:"code_review_rate_limit,omitempty"`
-	AdditionalRateLimits []usageAdditionalLimit `json:"additional_rate_limits,omitempty"`
-	Credits              any                    `json:"credits,omitempty"`
+	PlanType             string                   `json:"plan_type,omitempty"`
+	RateLimit            *usageLimitDetails       `json:"rate_limit,omitempty"`
+	CodeReviewRateLimit  *usageLimitDetails       `json:"code_review_rate_limit,omitempty"`
+	AdditionalRateLimits []usageAdditionalLimit   `json:"additional_rate_limits,omitempty"`
+	Credits              *provider.OverageCredits `json:"credits,omitempty"`
 }
 
 type usageLimitDetails struct {

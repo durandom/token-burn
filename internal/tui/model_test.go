@@ -891,3 +891,28 @@ func TestViewRendersStoredResetCapacityWithoutUsageWindows(t *testing.T) {
 		}
 	}
 }
+
+func TestViewRendersOverageCreditsSeparately(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		credits *provider.OverageCredits
+		want    string
+	}{
+		{"balance", &provider.OverageCredits{Balance: "62750.0000000000", OverageLimitReached: true}, "overage credits 62750.0000000000"},
+		{"unlimited", &provider.OverageCredits{Unlimited: true}, "overage credits unlimited"},
+		{"unknown", &provider.OverageCredits{}, "overage credits unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := NewModel(testConfig(t))
+			model.overageCredits = map[string]*provider.OverageCredits{"codex/local": tc.credits}
+			model.loading = false
+			view := model.View()
+			if !strings.Contains(view, tc.want) || strings.Contains(view, "resets owned") {
+				t.Fatalf("overage view %s", view)
+			}
+			if tc.credits.OverageLimitReached && !strings.Contains(view, "overage limit reached") {
+				t.Fatal("missing overage limit")
+			}
+		})
+	}
+}

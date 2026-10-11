@@ -67,7 +67,7 @@ func TestForecastIncludesResetCapacity(t *testing.T) {
 	}
 	db.Close()
 	results := []forecastOutput{{Provider: "codex", AccountID: "local"}}
-	if err := attachResetCapacity(context.Background(), cfg, results, now); err != nil {
+	if err := attachStoredCapacity(context.Background(), cfg, results, now); err != nil {
 		t.Fatal(err)
 	}
 	c := results[0].ResetCapacity
@@ -78,5 +78,31 @@ func TestForecastIncludesResetCapacity(t *testing.T) {
 	printForecastText(&out, results)
 	if !strings.Contains(out.String(), "resets owned 2") {
 		t.Fatal("forecast text missing resets")
+	}
+}
+
+func TestForecastOverageCapacitySeparateFromResets(t *testing.T) {
+	cfg := config.Default()
+	cfg.DatabasePath = filepath.Join(t.TempDir(), "usage.db")
+	now := time.Now().UTC()
+	db, err := store.Open(context.Background(), cfg.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertSnapshot(context.Background(), provider.Snapshot{Provider: "codex", AccountID: "local", ObservedAt: now, OverageCredits: &provider.OverageCredits{Balance: "62750.0000000000", OverageLimitReached: true}}, store.InsertOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	results := []forecastOutput{{Provider: "codex", AccountID: "local"}}
+	if err := attachStoredCapacity(context.Background(), cfg, results, now); err != nil {
+		t.Fatal(err)
+	}
+	if results[0].ResetCapacity != nil || results[0].OverageCredits == nil || results[0].OverageCredits.Balance != "62750.0000000000" {
+		t.Fatal("overage confused with resets")
+	}
+	var out bytes.Buffer
+	printForecastText(&out, results)
+	if !strings.Contains(out.String(), "overage credits 62750.0000000000 (overage limit reached)") {
+		t.Fatal("capacity text missing balance")
 	}
 }

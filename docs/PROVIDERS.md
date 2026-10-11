@@ -97,6 +97,23 @@ Relevant fields:
 - The endpoint is not a public OpenAI Platform API and may change.
 - Different OpenAI UI surfaces may disagree during reset propagation windows.
 
+### Overage credits
+
+The existing `wham/usage` response's `credits` object is normalized into a
+separate `OverageCredits` snapshot field:
+
+- `has_credits`, `unlimited`, and `overage_limit_reached`
+- `balance`, retained as the API's exact decimal string
+- `approx_local_messages` and `approx_cloud_messages`, retained as range arrays
+
+The nested `rate_limit_status.credits` shape is supported as a fallback. No
+additional endpoint is called for overage credits. They are stored per successful
+usage observation, exported as balance and limit-reached gauges, and shown in
+the local TUI and `forecast` capacity output. Reset counts and burn-rate forecasts
+remain independent. The balance uses the provider's credit units; token-burn does
+not convert it to currency, tokens, or exact message counts. Expiry is unknown
+and requires endpoint research before it can be displayed.
+
 ### Banked resets and weekly plan history
 
 The usage response's `rate_limit_reset_credits` summary provides the owned and

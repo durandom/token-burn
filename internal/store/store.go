@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS daemon_state (
 `,
 	},
 	{version: 3, sql: resetSchema},
+	{version: 4, sql: overageSchema},
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -305,6 +306,9 @@ INSERT OR IGNORE INTO live_usage_samples (
 		}
 	}
 
+	if err := insertOverageCredits(ctx, tx, snap); err != nil {
+		return err
+	}
 	if err := insertResets(ctx, tx, snap); err != nil {
 		return err
 	}

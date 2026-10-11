@@ -28,6 +28,7 @@ type Snapshot struct {
 	Source                  string
 	ObservedAt              time.Time
 	Windows                 []Window
+	OverageCredits          *OverageCredits
 	Resets                  *ResetSummary
 	ResetDetails            *ResetDetails
 	ResetDetailsAttemptedAt *time.Time

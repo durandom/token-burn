@@ -160,3 +160,18 @@ also includes program flags, breakdowns, coverage, polling errors, and the detai
 attempt time. The TUI reads owned resets, next expiry, and last use from SQLite.
 `forecast` includes reset capacity when known, without assuming redemption in
 its burn-rate projection. Unknown counts stay unknown rather than becoming zero.
+
+## Overage-credit observations (migration 4)
+
+`overage_credit_snapshots` stores one row per `(provider, account_id, observed_at)`
+with redacted normalized credit JSON. Observation times use UTC with a fixed
+nine-digit fractional part, preserving subsecond ordering. Repeated timestamps
+upsert the same row. Decimal balance strings and approximate message ranges are
+retained without rounding; the balance is separate from reset capacity.
+
+A Codex observation that omits `credits` stores NULL data. Latest-credit reads
+then return unknown instead of carrying forward an older balance. Historical
+rows remain available through the store's `OverageCreditHistory` query.
+`forecast --json` exposes `overage_credits` alongside `reset_capacity`; the local
+TUI shows the latest balance, unlimited state, and overage-limit warning. No
+expiry field is synthesized.

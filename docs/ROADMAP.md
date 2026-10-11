@@ -11,6 +11,12 @@ pretending that provider internals are stable.
 - Better terminal layout behavior for very narrow terminals.
 - More fixtures for provider response shape drift.
 
+## Overage-credit expiry (TODO only)
+
+- Find and verify a provider-owned source for Codex overage-credit expiry.
+  `wham/usage.credits` provides balance and message estimates, but no verified
+  expiry. Do not infer expiry from purchase dates or banked-reset expirations.
+
 ## Discovered endpoints to investigate (TODO only)
 
 The 2026-10-11 discovery found these additional read endpoints. Their payloads,

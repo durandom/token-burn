@@ -668,7 +668,7 @@ func newForecastCommand(configPath *string) *cobra.Command {
 				return err
 			}
 			results := forecastSamples(samples, now)
-			if err := attachResetCapacity(ctx, cfg, results, now); err != nil {
+			if err := attachStoredCapacity(ctx, cfg, results, now); err != nil {
 				return err
 			}
 			if jsonOut {
@@ -744,20 +744,21 @@ type commandError struct {
 }
 
 type forecastOutput struct {
-	Provider                 string                  `json:"provider"`
-	AccountID                string                  `json:"account_id"`
-	WindowName               string                  `json:"window_name"`
-	ResetAt                  *time.Time              `json:"reset_at,omitempty"`
-	ComputedAt               time.Time               `json:"computed_at"`
-	SampleCount              int                     `json:"sample_count"`
-	BurnRatePercentPerHour   *float64                `json:"burn_rate_percent_per_hour,omitempty"`
-	ProjectedResetPercent    *float64                `json:"projected_reset_percent,omitempty"`
-	Estimated90At            *time.Time              `json:"estimated_90_at,omitempty"`
-	Estimated100At           *time.Time              `json:"estimated_100_at,omitempty"`
-	Confidence               float64                 `json:"confidence"`
-	InsufficientDataReason   string                  `json:"insufficient_data_reason,omitempty"`
-	StableWindowObservedFrom *time.Time              `json:"stable_window_observed_from,omitempty"`
-	ResetCapacity            *forecast.ResetCapacity `json:"reset_capacity,omitempty"`
+	Provider                 string                        `json:"provider"`
+	AccountID                string                        `json:"account_id"`
+	WindowName               string                        `json:"window_name"`
+	ResetAt                  *time.Time                    `json:"reset_at,omitempty"`
+	ComputedAt               time.Time                     `json:"computed_at"`
+	SampleCount              int                           `json:"sample_count"`
+	BurnRatePercentPerHour   *float64                      `json:"burn_rate_percent_per_hour,omitempty"`
+	ProjectedResetPercent    *float64                      `json:"projected_reset_percent,omitempty"`
+	Estimated90At            *time.Time                    `json:"estimated_90_at,omitempty"`
+	Estimated100At           *time.Time                    `json:"estimated_100_at,omitempty"`
+	Confidence               float64                       `json:"confidence"`
+	InsufficientDataReason   string                        `json:"insufficient_data_reason,omitempty"`
+	StableWindowObservedFrom *time.Time                    `json:"stable_window_observed_from,omitempty"`
+	OverageCredits           *usageprovider.OverageCredits `json:"overage_credits,omitempty"`
+	ResetCapacity            *forecast.ResetCapacity       `json:"reset_capacity,omitempty"`
 }
 
 func runOnce(ctx context.Context, cfg config.Config, diag io.Writer) onceResult {
@@ -999,6 +1000,12 @@ func printForecastText(w io.Writer, results []forecastOutput) {
 		}
 		if result.Estimated100At != nil {
 			fmt.Fprintf(w, " 100%% at %s", result.Estimated100At.Local().Format(time.RFC3339))
+		}
+		if c := result.OverageCredits; c != nil {
+			fmt.Fprintf(w, " overage credits %s", overageBalanceText(c))
+			if c.OverageLimitReached {
+				fmt.Fprint(w, " (overage limit reached)")
+			}
 		}
 		if c := result.ResetCapacity; c != nil && c.OwnedResets != nil {
 			fmt.Fprintf(w, " resets owned %d next expiry %s", *c.OwnedResets, localResetTime(c.NextExpiry))

@@ -338,12 +338,13 @@ func mapUsagePayload(payload usagePayload, acct usageprovider.Account, observedA
 	}
 
 	snap := usageprovider.Snapshot{
-		Resets:     payload.ResetCredits,
-		Provider:   id,
-		AccountID:  acct.ID,
-		PlanType:   planType,
-		Source:     source,
-		ObservedAt: observedAt.UTC(),
+		OverageCredits: payload.Credits,
+		Resets:         payload.ResetCredits,
+		Provider:       id,
+		AccountID:      acct.ID,
+		PlanType:       planType,
+		Source:         source,
+		ObservedAt:     observedAt.UTC(),
 		Raw: map[string]any{
 			"account_id": payload.AccountID,
 			"user_id":    payload.UserID,
@@ -367,6 +368,7 @@ func mapUsagePayload(payload usagePayload, acct usageprovider.Account, observedA
 		}
 		if payload.Credits == nil {
 			snap.Raw["credits"] = payload.RateLimitStatus.Credits
+			snap.OverageCredits = payload.RateLimitStatus.Credits
 		}
 	}
 

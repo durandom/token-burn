@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	MetricOverageCreditsBalance         = "token_burn_overage_credits_balance"
+	MetricOverageLimitReached           = "token_burn_overage_limit_reached"
 	MetricResetsAvailable               = "token_burn_resets_available"
 	MetricResetsSecondsToNextExpiry     = "token_burn_resets_seconds_to_next_expiry"
 	MetricUsageUsedPercent              = "token_burn_usage_used_percent"
@@ -132,6 +134,16 @@ func EmitSnapshot(ctx context.Context, recorder Recorder, snap usageprovider.Sna
 	}
 	capacity := forecast.Capacity(snap.Resets, credits, events, now)
 	attrs := []attribute.KeyValue{attribute.String("provider", snap.Provider), attribute.String("account_id", snap.AccountID)}
+	if c := snap.OverageCredits; c != nil {
+		if balance, ok := c.NumericBalance(); ok {
+			recorder.RecordGauge(ctx, MetricOverageCreditsBalance, balance, attrs...)
+		}
+		reached := 0.0
+		if c.OverageLimitReached {
+			reached = 1
+		}
+		recorder.RecordGauge(ctx, MetricOverageLimitReached, reached, attrs...)
+	}
 	if capacity.OwnedResets != nil {
 		recorder.RecordGauge(ctx, MetricResetsAvailable, float64(*capacity.OwnedResets), attrs...)
 	}

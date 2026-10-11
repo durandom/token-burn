@@ -233,3 +233,37 @@ func TestResetMetricZeroAndUnknown(t *testing.T) {
 		})
 	}
 }
+
+func TestOverageGaugesSeparateFromResetMetrics(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		credits *usageprovider.OverageCredits
+		balance float64
+		reached float64
+		gauges  int
+	}{
+		{"balance", &usageprovider.OverageCredits{Balance: "62750.0000000000", OverageLimitReached: true}, 62750, 1, 2},
+		{"zero", &usageprovider.OverageCredits{Balance: "0.0000000000"}, 0, 0, 2},
+		{"unlimited", &usageprovider.OverageCredits{Unlimited: true}, 0, 0, 1},
+		{"unknown", nil, 0, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &fakeRecorder{}
+			EmitSnapshot(context.Background(), recorder, usageprovider.Snapshot{Provider: "codex", AccountID: "local", OverageCredits: tc.credits}, time.Now())
+			if len(recorder.gauges) != tc.gauges {
+				t.Fatalf("gauge count %d", len(recorder.gauges))
+			}
+			if tc.gauges == 2 {
+				assertGauge(t, recorder, MetricOverageCreditsBalance, tc.balance, nil)
+			}
+			if tc.gauges > 0 {
+				assertGauge(t, recorder, MetricOverageLimitReached, tc.reached, nil)
+			}
+			for _, g := range recorder.gauges {
+				if len(g.attrs) != 2 || g.attrs["provider"] != "codex" || g.attrs["account_id"] != "local" {
+					t.Fatal("overage attribute cardinality")
+				}
+			}
+		})
+	}
+}

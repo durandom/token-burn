@@ -7,6 +7,7 @@ import (
 
 	"github.com/durandom/token-burn/internal/config"
 	"github.com/durandom/token-burn/internal/forecast"
+	"github.com/durandom/token-burn/internal/provider"
 	"github.com/durandom/token-burn/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -72,7 +73,7 @@ func localResetTime(t *time.Time) string {
 	return t.Local().Format(time.RFC3339)
 }
 
-func attachResetCapacity(ctx context.Context, cfg config.Config, results []forecastOutput, now time.Time) error {
+func attachStoredCapacity(ctx context.Context, cfg config.Config, results []forecastOutput, now time.Time) error {
 	if cfg.OTel.Read.Mode == "openobserve" {
 		return nil
 	}
@@ -87,10 +88,24 @@ func attachResetCapacity(ctx context.Context, cfg config.Config, results []forec
 		if err != nil {
 			return err
 		}
+		r.OverageCredits, err = db.LatestOverageCredits(ctx, r.Provider, r.AccountID)
+		if err != nil {
+			return err
+		}
 		if h.Summary != nil {
 			c := forecast.Capacity(h.Summary, h.Credits, h.Events, now)
 			r.ResetCapacity = &c
 		}
 	}
 	return nil
+}
+
+func overageBalanceText(c *provider.OverageCredits) string {
+	if c.Unlimited {
+		return "unlimited"
+	}
+	if c.Balance == "" {
+		return "unknown"
+	}
+	return c.Balance
 }

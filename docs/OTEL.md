@@ -155,3 +155,17 @@ so the available gauge refreshes with usage and expiry seconds decrease between
 detail polls. Consumers should treat a missing expiry sample as unknown rather
 than carry it forward indefinitely. Historical reset events and plan breakdowns
 stay in SQLite and are available through `resets --json`.
+
+## Overage-credit gauges
+
+- `token_burn_overage_credits_balance`: the numeric value of the Codex API's
+  decimal credit balance, in provider credit units. Zero balances are exported;
+  missing, non-finite, invalid, or negative values are omitted. OTel's float
+  conversion may round; SQLite retains the original decimal string.
+- `token_burn_overage_limit_reached`: `1` when the API reports the overage limit
+  reached, otherwise `0` when a credit object is present.
+
+Both gauges carry only `provider` and configured `account_id`. They are emitted
+from the existing usage poll; overage credits never contribute to reset-count
+metrics. An unlimited account without a numeric balance emits no balance sample.
+No expiry metric is emitted because no expiry source has been verified.

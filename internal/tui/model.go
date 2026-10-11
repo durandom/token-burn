@@ -14,6 +14,7 @@ import (
 	"github.com/durandom/token-burn/internal/daemon"
 	"github.com/durandom/token-burn/internal/forecast"
 	"github.com/durandom/token-burn/internal/otelread"
+	"github.com/durandom/token-burn/internal/provider"
 	"github.com/durandom/token-burn/internal/store"
 )
 
@@ -38,37 +39,39 @@ func ParseLayoutMode(value string) (LayoutMode, error) {
 }
 
 type Model struct {
-	cfg         config.Config
-	theme       Theme
-	styles      styles
-	width       int
-	height      int
-	layoutMode  LayoutMode
-	version     string
-	staleAfter  time.Duration
-	lastPoll    time.Time
-	lastGood    time.Time
-	loading     bool
-	samples     []store.Sample
-	capacities  map[string]forecast.ResetCapacity
-	forecasts   []forecastRow
-	statuses    map[string]accountPollStatus
-	errors      []string
-	daemonState *store.DaemonState
-	dataSource  string
+	cfg            config.Config
+	theme          Theme
+	styles         styles
+	width          int
+	height         int
+	layoutMode     LayoutMode
+	version        string
+	staleAfter     time.Duration
+	lastPoll       time.Time
+	lastGood       time.Time
+	loading        bool
+	samples        []store.Sample
+	overageCredits map[string]*provider.OverageCredits
+	capacities     map[string]forecast.ResetCapacity
+	forecasts      []forecastRow
+	statuses       map[string]accountPollStatus
+	errors         []string
+	daemonState    *store.DaemonState
+	dataSource     string
 }
 
 type tickMsg struct{}
 type refreshMsg struct {
-	samples     []store.Sample
-	capacities  map[string]forecast.ResetCapacity
-	forecasts   []forecastRow
-	statuses    map[string]accountPollStatus
-	errors      []string
-	lastPoll    time.Time
-	lastGood    time.Time
-	daemonState *store.DaemonState
-	dataSource  string
+	samples        []store.Sample
+	overageCredits map[string]*provider.OverageCredits
+	capacities     map[string]forecast.ResetCapacity
+	forecasts      []forecastRow
+	statuses       map[string]accountPollStatus
+	errors         []string
+	lastPoll       time.Time
+	lastGood       time.Time
+	daemonState    *store.DaemonState
+	dataSource     string
 }
 
 type pollErrorMsg struct{ err error }
@@ -149,6 +152,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshMsg:
 		m.loading = false
 		m.samples = msg.samples
+		m.overageCredits = msg.overageCredits
 		m.capacities = msg.capacities
 		m.forecasts = msg.forecasts
 		m.statuses = msg.statuses
@@ -197,7 +201,7 @@ func (m Model) View() string {
 		b.WriteString("\n\n")
 	}
 
-	if len(m.samples) == 0 && !m.hasResetCapacity() {
+	if len(m.samples) == 0 && !m.hasCapacity() {
 		prefix := b.String()
 		empty := panelAtWidth(st.panel, m.width).Render(st.subtle.Render("No samples yet."))
 		if m.height > 0 {
@@ -360,6 +364,13 @@ func (m Model) renderUsage(layout usageLayout) string {
 		key := sample.Provider + "/" + sample.AccountID
 		grouped[key] = append(grouped[key], sample)
 	}
+	for key, c := range m.overageCredits {
+		if c != nil {
+			if _, ok := grouped[key]; !ok {
+				grouped[key] = nil
+			}
+		}
+	}
 	for key, c := range m.capacities {
 		if c.OwnedResets != nil {
 			if _, ok := grouped[key]; !ok {
@@ -391,6 +402,18 @@ func (m Model) renderUsage(layout usageLayout) string {
 				used = c.LastUsed.Local().Format("Jan 02 15:04")
 			}
 			b.WriteString(fmt.Sprintf("\n  resets owned %d · next expiry %s · last used %s", *c.OwnedResets, expiry, used))
+		}
+		if c := m.overageCredits[key]; c != nil {
+			balance := c.Balance
+			if c.Unlimited {
+				balance = "unlimited"
+			} else if balance == "" {
+				balance = "unknown"
+			}
+			b.WriteString("\n  overage credits " + balance)
+			if c.OverageLimitReached {
+				b.WriteString(" · overage limit reached")
+			}
 		}
 		b.WriteString("\n")
 		for _, row := range rows {
@@ -643,9 +666,16 @@ func localRefresh(ctx context.Context, cfg config.Config, now time.Time) refresh
 	var errors []string
 	pollStatus := map[string]accountPollStatus{}
 	capacities := map[string]forecast.ResetCapacity{}
+	overageCredits := map[string]*provider.OverageCredits{}
 
 	var samples []store.Sample
 	for _, acct := range cfg.Accounts {
+		credits, err := db.LatestOverageCredits(ctx, acct.Provider, acct.ID)
+		if err != nil {
+			errors = append(errors, err.Error())
+		} else {
+			overageCredits[accountKey(acct.Provider, acct.ID)] = credits
+		}
 		h, err := db.ResetHistory(ctx, acct.Provider, acct.ID)
 		if err != nil {
 			errors = append(errors, err.Error())
@@ -683,15 +713,16 @@ func localRefresh(ctx context.Context, cfg config.Config, now time.Time) refresh
 		daemonState = &state
 	}
 	return refreshMsg{
-		samples:     samples,
-		capacities:  capacities,
-		forecasts:   forecasts,
-		statuses:    pollStatus,
-		errors:      errors,
-		lastPoll:    latestPollOrSampleTime(pollStatus, samples),
-		lastGood:    latestSuccessTime(pollStatus, samples),
-		daemonState: daemonState,
-		dataSource:  "sqlite",
+		samples:        samples,
+		capacities:     capacities,
+		overageCredits: overageCredits,
+		forecasts:      forecasts,
+		statuses:       pollStatus,
+		errors:         errors,
+		lastPoll:       latestPollOrSampleTime(pollStatus, samples),
+		lastGood:       latestSuccessTime(pollStatus, samples),
+		daemonState:    daemonState,
+		dataSource:     "sqlite",
 	}
 }
 
@@ -1224,7 +1255,12 @@ func max(a, b int) int {
 	return b
 }
 
-func (m Model) hasResetCapacity() bool {
+func (m Model) hasCapacity() bool {
+	for _, c := range m.overageCredits {
+		if c != nil {
+			return true
+		}
+	}
 	for _, c := range m.capacities {
 		if c.OwnedResets != nil {
 			return true
