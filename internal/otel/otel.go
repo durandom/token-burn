@@ -12,7 +12,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 )
 
@@ -78,14 +77,7 @@ func NewOTLP(ctx context.Context, cfg Config) (*Exporter, error) {
 		cfg.ServiceVersion = "dev"
 	}
 
-	exp, err := otlpmetrichttp.New(ctx, otlpmetrichttp.WithEndpointURL(cfg.Endpoint),
-		otlpmetrichttp.WithTemporalitySelector(func(kind sdkmetric.InstrumentKind) metricdata.Temporality {
-			// Gauges must not re-export old observations with fresh timestamps.
-			if kind == sdkmetric.InstrumentKindGauge {
-				return metricdata.DeltaTemporality
-			}
-			return sdkmetric.DefaultTemporalitySelector(kind)
-		}))
+	exp, err := otlpmetrichttp.New(ctx, otlpmetrichttp.WithEndpointURL(cfg.Endpoint))
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
 	}

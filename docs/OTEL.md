@@ -184,16 +184,6 @@ to reset-count metrics. An unlimited account without a numeric balance emits
 no balance sample.
 No API expiry metric is emitted because no expiry source has been verified.
 
-Gauges export only observations recorded since the previous collection; old
-values are not re-exported with fresh timestamps. Readers should group by
-`provider` and `account_id`, require fresh flag samples from the same collection,
-and reconstruct `OverageCredits` from those flags plus the balance from that
-collection, if present. A missing balance remains unknown (an empty `Balance`),
-not zero. A fresh balance sample of `0` means zero credits. If fresh flag samples
-are absent, leave `OverageCredits` nil; never carry older credits forward or
-replace missing samples with zero. Apply the reader's freshness cutoff to sample
-timestamps, allowing for the poll and export intervals.
-
 ## Configured credit expiry
 
 `token_burn_credit_seconds_to_next_expiry` reports seconds until the earliest

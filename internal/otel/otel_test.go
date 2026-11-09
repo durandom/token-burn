@@ -313,9 +313,7 @@ func TestConfiguredCreditExpiryMetrics(t *testing.T) {
 	}
 }
 
-// Exercise the real OTLP exporter: stale gauges must not acquire fresh timestamps
-// on later exports, including when the next successful poll has no credit data.
-func TestOTLPOverageFreshness(t *testing.T) {
+func TestOTLPOverageMetrics(t *testing.T) {
 	requests := make(chan *collectormetricspb.ExportMetricsServiceRequest, 10)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -381,21 +379,6 @@ func TestOTLPOverageFreshness(t *testing.T) {
 		}
 		if len(point.Attributes) != 2 {
 			t.Errorf("%s attributes = %v", name, point.Attributes)
-		}
-	}
-	for _, step := range []string{"no poll", "unknown credits", "poll error"} {
-		switch step {
-		case "unknown credits":
-			snap.OverageCredits = nil
-			EmitSnapshot(ctx, exporter, snap, time.Now())
-		case "poll error":
-			EmitPollError(ctx, exporter, snap.Provider, snap.AccountID, "transient")
-		}
-		for name := range collect() {
-			switch name {
-			case MetricOverageCreditsBalance, MetricOverageCreditsHasCredits, MetricOverageCreditsUnlimited, MetricOverageLimitReached:
-				t.Errorf("%s re-exported stale gauge %s", step, name)
-			}
 		}
 	}
 }
