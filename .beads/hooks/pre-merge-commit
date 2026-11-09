@@ -1,0 +1,80 @@
+#!/bin/sh
+# Global git hook dispatcher for core.hooksPath (~/.config/git/hooks).
+#
+# Git ignores $GIT_DIR/hooks when hooksPath is set, so every common hook
+# name is a symlink here. This script chains to the repo-local hook first,
+# then on commit-msg appends Assisted-by when an AI harness is in the env.
+#
+# Escape: SKIP_ASSISTED_BY=1
+# Test:   GIT_ASSISTED_BY_HOOK=commit-msg path/to/dispatch MSGFILE
+
+hook_name="${GIT_ASSISTED_BY_HOOK:-$(basename "$0")}"
+
+if [ "$hook_name" = "dispatch" ]; then
+	echo "git hook dispatch: invoke via a hook-name symlink" >&2
+	exit 1
+fi
+
+# --git-path hooks follows core.hooksPath (this directory). Repo hooks live
+# under the common git dir even in worktrees.
+git_common_dir=$(git rev-parse --git-common-dir 2>/dev/null) || git_common_dir=""
+local_hook=""
+if [ -n "$git_common_dir" ]; then
+	local_hook="$git_common_dir/hooks/$hook_name"
+fi
+
+if [ -n "$local_hook" ] && [ -f "$local_hook" ] && [ -x "$local_hook" ]; then
+	case "$local_hook" in
+	*/.config/git/hooks/*) ;;
+	*)
+		"$local_hook" "$@" || exit $?
+		;;
+	esac
+fi
+
+assisted_by_value() {
+	harness=""
+	model=""
+
+	if [ -n "${PI_CODING_AGENT:-}" ] || [ "${AI_AGENT:-}" = "pi" ]; then
+		harness="pi"
+		model="${PI_MODEL:-}"
+	elif [ -n "${CLAUDECODE:-}" ]; then
+		harness="claude"
+		model="${CLAUDE_MODEL:-${ANTHROPIC_MODEL:-}}"
+	elif [ -n "${CODEX_THREAD_ID:-}" ]; then
+		harness="codex"
+		model="${CODEX_MODEL:-}"
+	elif [ -n "${OPENCODE:-}" ]; then
+		harness="opencode"
+		model="${OPENCODE_MODEL:-}"
+	elif [ -n "${AI_AGENT:-}" ]; then
+		harness="$AI_AGENT"
+		model=""
+	else
+		return 1
+	fi
+
+	# Exact ids only. Do not pretty-print or invent a model name.
+	if [ -n "$model" ]; then
+		printf '%s:%s\n' "$harness" "$model"
+	else
+		printf '%s\n' "$harness"
+	fi
+}
+
+if [ "$hook_name" = "commit-msg" ]; then
+	msgfile="${1:-}"
+	if [ -n "$msgfile" ] && [ -f "$msgfile" ] && [ -z "${SKIP_ASSISTED_BY:-}" ]; then
+		if ! grep -qi '^Assisted-by:' "$msgfile" 2>/dev/null; then
+			identity=$(assisted_by_value) || identity=""
+			if [ -n "$identity" ]; then
+				git interpret-trailers --if-exists addIfDifferent \
+					--in-place --trailer "Assisted-by: $identity" \
+					"$msgfile" || true
+			fi
+		fi
+	fi
+fi
+
+exit 0

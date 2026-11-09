@@ -1,0 +1,139 @@
+#!/bin/sh
+# Global git hook dispatcher for core.hooksPath (~/.config/git/hooks).
+#
+# Git ignores $GIT_DIR/hooks when hooksPath is set, so every common hook
+# name is a symlink here. This script chains to the repo-local hook first,
+# then on commit-msg appends Assisted-by when an AI harness is in the env.
+#
+# Escape: SKIP_ASSISTED_BY=1
+# Test:   GIT_ASSISTED_BY_HOOK=commit-msg path/to/dispatch MSGFILE
+
+hook_name="${GIT_ASSISTED_BY_HOOK:-$(basename "$0")}"
+
+if [ "$hook_name" = "dispatch" ]; then
+	echo "git hook dispatch: invoke via a hook-name symlink" >&2
+	exit 1
+fi
+
+# --git-path hooks follows core.hooksPath (this directory). Repo hooks live
+# under the common git dir even in worktrees.
+git_common_dir=$(git rev-parse --git-common-dir 2>/dev/null) || git_common_dir=""
+local_hook=""
+if [ -n "$git_common_dir" ]; then
+	local_hook="$git_common_dir/hooks/$hook_name"
+fi
+
+if [ -n "$local_hook" ] && [ -f "$local_hook" ] && [ -x "$local_hook" ]; then
+	case "$local_hook" in
+	*/.config/git/hooks/*) ;;
+	*)
+		"$local_hook" "$@" || exit $?
+		;;
+	esac
+fi
+
+assisted_by_value() {
+	harness=""
+	model=""
+
+	if [ -n "${PI_CODING_AGENT:-}" ] || [ "${AI_AGENT:-}" = "pi" ]; then
+		harness="pi"
+		model="${PI_MODEL:-}"
+	elif [ -n "${CLAUDECODE:-}" ]; then
+		harness="claude"
+		model="${CLAUDE_MODEL:-${ANTHROPIC_MODEL:-}}"
+	elif [ -n "${CODEX_THREAD_ID:-}" ]; then
+		harness="codex"
+		model="${CODEX_MODEL:-}"
+	elif [ -n "${OPENCODE:-}" ]; then
+		harness="opencode"
+		model="${OPENCODE_MODEL:-}"
+	elif [ -n "${AI_AGENT:-}" ]; then
+		harness="$AI_AGENT"
+		model=""
+	else
+		return 1
+	fi
+
+	# Exact ids only. Do not pretty-print or invent a model name.
+	if [ -n "$model" ]; then
+		printf '%s:%s\n' "$harness" "$model"
+	else
+		printf '%s\n' "$harness"
+	fi
+}
+
+if [ "$hook_name" = "commit-msg" ]; then
+	msgfile="${1:-}"
+	if [ -n "$msgfile" ] && [ -f "$msgfile" ] && [ -z "${SKIP_ASSISTED_BY:-}" ]; then
+		if ! grep -qi '^Assisted-by:' "$msgfile" 2>/dev/null; then
+			identity=$(assisted_by_value) || identity=""
+			if [ -n "$identity" ]; then
+				git interpret-trailers --if-exists addIfDifferent \
+					--in-place --trailer "Assisted-by: $identity" \
+					"$msgfile" || true
+			fi
+		fi
+	fi
+fi
+
+exit 0
+
+# --- BEGIN BEADS INTEGRATION v1.3.4 ---
+# This section is managed by beads. Do not remove these markers.
+if command -v bd >/dev/null 2>&1; then
+  export BD_GIT_HOOK=1
+  _bd_timeout=${BEADS_HOOK_TIMEOUT:-300}
+  case "$_bd_timeout" in
+    *[!0-9]*|'') _bd_timeout_invalid=1 ;;
+    *[1-9]*) _bd_timeout_invalid=0 ;;
+    *) _bd_timeout_invalid=1 ;;
+  esac
+  if [ "$_bd_timeout_invalid" -eq 1 ]; then
+    echo >&2 "beads: invalid BEADS_HOOK_TIMEOUT; using 300 seconds"
+    _bd_timeout=300
+  fi
+  _bd_timeout_backend=none
+  _bd_timeout_command=
+  for _bd_timeout_candidate in timeout gtimeout; do
+    if command -v "$_bd_timeout_candidate" >/dev/null 2>&1; then
+      if _bd_timeout_version="$("$_bd_timeout_candidate" --version 2>/dev/null)"; then
+        case "$_bd_timeout_version" in
+          "timeout (GNU coreutils) "*) _bd_timeout_command=$_bd_timeout_candidate; break ;;
+        esac
+      fi
+    fi
+  done
+  if [ -n "$_bd_timeout_command" ]; then
+    _bd_timeout_backend=coreutils
+    if "$_bd_timeout_command" -- "$_bd_timeout" bd hooks run pre-commit "$@"; then
+      _bd_exit=0
+    else
+      _bd_exit=$?
+    fi
+  elif command -v perl >/dev/null 2>&1; then
+    _bd_timeout_backend=perl
+    if perl -e 'alarm shift; exec @ARGV' -- "$_bd_timeout" bd hooks run pre-commit "$@"; then
+      _bd_exit=0
+    else
+      _bd_exit=$?
+    fi
+  else
+    echo >&2 "beads: hook 'pre-commit' running without timeout; install coreutils or perl to enable BEADS_HOOK_TIMEOUT"
+    if bd hooks run pre-commit "$@"; then
+      _bd_exit=0
+    else
+      _bd_exit=$?
+    fi
+  fi
+  if { [ "$_bd_timeout_backend" = coreutils ] && [ "$_bd_exit" -eq 124 ]; } || { [ "$_bd_timeout_backend" = perl ] && [ "$_bd_exit" -eq 142 ]; }; then
+    echo >&2 "beads: hook 'pre-commit' timed out after ${_bd_timeout}s — continuing without beads"
+    _bd_exit=0
+  fi
+  if [ "$_bd_exit" -eq 3 ]; then
+    echo >&2 "beads: database not initialized — skipping hook 'pre-commit'"
+    _bd_exit=0
+  fi
+  if [ "$_bd_exit" -ne 0 ]; then exit "$_bd_exit"; fi
+fi
+# --- END BEADS INTEGRATION v1.3.4 ---
