@@ -7,6 +7,7 @@ import (
 
 	"github.com/durandom/token-burn/internal/config"
 	"github.com/durandom/token-burn/internal/forecast"
+	"github.com/durandom/token-burn/internal/otelread"
 	"github.com/durandom/token-burn/internal/provider"
 	"github.com/durandom/token-burn/internal/store"
 	"github.com/spf13/cobra"
@@ -91,9 +92,14 @@ func localResetTime(t *time.Time) string {
 
 func attachStoredCapacity(ctx context.Context, cfg config.Config, results []forecastOutput, now time.Time) error {
 	if cfg.OTel.Read.Mode == "openobserve" {
+		remote, err := otelread.NewClient(cfg.OTel.Read).Fetch(ctx, now)
+		if err != nil {
+			return err
+		}
 		for i := range results {
 			r := &results[i]
-			r.ConfiguredCreditCapacity = forecast.CreditExpiry(cfg.CreditGrants[r.Provider], nil, now)
+			r.OverageCredits = remote.Credits[otelread.Account{Provider: r.Provider, ID: r.AccountID}]
+			r.ConfiguredCreditCapacity = forecast.CreditExpiry(cfg.CreditGrants[r.Provider], r.OverageCredits, now)
 		}
 		return nil
 	}

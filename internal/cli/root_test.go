@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/durandom/token-burn/internal/config"
+	"github.com/durandom/token-burn/internal/otelread"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 	"github.com/durandom/token-burn/internal/service"
 	"github.com/durandom/token-burn/internal/store"
@@ -35,10 +38,11 @@ func TestLatestStatusSamplesFallsBackToOpenObserve(t *testing.T) {
 	cfg.OTel.Read.Endpoint = server.URL
 	cfg.OTel.Read.Organization = "default"
 	cfg.OTel.Read.Lookback = time.Hour
-	samples, err := latestStatusSamples(context.Background(), cfg, time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC))
+	remote, err := latestStatusSnapshot(context.Background(), cfg, time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("latestStatusSamples() error = %v", err)
 	}
+	samples := remote.Samples
 	if len(samples) != 1 || samples[0].Provider != "claude" || samples[0].UsedPercent != 61 {
 		t.Fatalf("samples = %#v", samples)
 	}
@@ -46,10 +50,10 @@ func TestLatestStatusSamplesFallsBackToOpenObserve(t *testing.T) {
 
 func TestSnapshotsFromSamplesGroupsAccounts(t *testing.T) {
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
-	snapshots := snapshotsFromSamples([]store.Sample{
+	snapshots := snapshotsFromSamples(otelread.Snapshot{Samples: []store.Sample{
 		{ObservedAt: now, Provider: "claude", AccountID: "claude-default", WindowName: "five_hour", UsedPercent: 10},
 		{ObservedAt: now, Provider: "claude", AccountID: "claude-default", WindowName: "seven_day", UsedPercent: 20},
-	})
+	}})
 	if len(snapshots) != 1 || len(snapshots[0].Windows) != 2 {
 		t.Fatalf("snapshots = %#v", snapshots)
 	}
@@ -220,6 +224,104 @@ id = "codex-default"
 				if strings.Contains(string(unit), secret) {
 					t.Fatal("service unit contains config environment")
 				}
+			}
+		})
+	}
+}
+
+func TestOpenObserveCommandsIncludeFreshCredits(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stale=%t", stale), func(t *testing.T) {
+			observed := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Second)
+			creditTime := observed
+			if stale {
+				creditTime = observed.Add(-3 * time.Minute)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				var hits []map[string]any
+				if strings.Contains(string(body), `FROM \"token_burn_usage_used_percent\"`) {
+					for _, window := range []string{"five_hour", "seven_day"} {
+						for _, account := range []string{"a", "b"} {
+							hits = append(hits, map[string]any{"_timestamp": observed.UnixMicro(), "provider": "codex", "account_id": account, "window": window, "value": 40})
+						}
+					}
+				}
+				for name, value := range map[string]float64{
+					"token_burn_overage_credits_balance":     12.5,
+					"token_burn_overage_credits_has_credits": 1,
+					"token_burn_overage_credits_unlimited":   0,
+					"token_burn_overage_limit_reached":       1,
+				} {
+					if strings.Contains(string(body), `FROM \"`+name+`\"`) {
+						hits = append(hits, map[string]any{"_timestamp": creditTime.UnixMicro(), "provider": "codex", "account_id": "a", "value": value})
+					}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"hits": hits})
+			}))
+			defer server.Close()
+			path := filepath.Join(t.TempDir(), "config.toml")
+			data := fmt.Sprintf("database_path = %q\n[otel.read]\nmode = \"openobserve\"\nendpoint = %q\norganization = \"default\"\nlookback = \"1h\"\n", filepath.Join(t.TempDir(), "missing", "db"), server.URL)
+			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for _, command := range []string{"status", "forecast", "once"} {
+				t.Run(command, func(t *testing.T) {
+					cmd := NewRootCommand(BuildInfo{})
+					var out bytes.Buffer
+					cmd.SetOut(&out)
+					cmd.SetArgs([]string{"--config", path, command, "--json"})
+					if err := cmd.Execute(); err != nil {
+						t.Fatal(err)
+					}
+					var rows []map[string]json.RawMessage
+					key, accountKey := "overage_credits", "AccountID"
+					if command == "once" {
+						var result struct {
+							Snapshots []map[string]json.RawMessage `json:"snapshots"`
+						}
+						if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+							t.Fatal(err)
+						}
+						rows = result.Snapshots
+						key = "OverageCredits"
+					} else {
+						if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
+							t.Fatal(err)
+						}
+						if command == "forecast" {
+							accountKey = "account_id"
+						}
+					}
+					wantRows := 4
+					if command == "once" {
+						wantRows = 2
+					}
+					if len(rows) != wantRows {
+						t.Fatalf("rows = %s", out.String())
+					}
+					for _, row := range rows {
+						var account string
+						_ = json.Unmarshal(row[accountKey], &account)
+						raw := row[key]
+						present := len(raw) != 0 && string(raw) != "null"
+						if present != (!stale && account == "a") {
+							t.Fatalf("credits presence: %s", out.String())
+						}
+						if !present {
+							continue
+						}
+						var credits usageprovider.OverageCredits
+						if err := json.Unmarshal(raw, &credits); err != nil {
+							t.Fatal(err)
+						}
+						var fields map[string]any
+						_ = json.Unmarshal(raw, &fields)
+						if len(fields) != 5 || credits.Balance != "12.5" || !credits.HasCredits || credits.Unlimited || !credits.OverageLimitReached || credits.ObservedAt == nil || !credits.ObservedAt.Equal(creditTime) {
+							t.Fatalf("credits = %s", raw)
+						}
+					}
+				})
 			}
 		})
 	}

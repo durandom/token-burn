@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/durandom/token-burn/internal/config"
 	"github.com/durandom/token-burn/internal/forecast"
 	"github.com/durandom/token-burn/internal/otel"
+	"github.com/durandom/token-burn/internal/provider"
 	"github.com/durandom/token-burn/internal/store"
 )
 
@@ -28,7 +31,13 @@ type Forecast struct {
 	Result   forecast.Result
 }
 
+type Account struct {
+	Provider string
+	ID       string
+}
+
 type Snapshot struct {
+	Credits   map[Account]*provider.OverageCredits
 	Samples   []store.Sample
 	Forecasts []Forecast
 }
@@ -77,7 +86,14 @@ type searchResponse struct {
 	Message string      `json:"message"`
 }
 
-var metricNames = []string{
+var creditMetricNames = []string{
+	otel.MetricOverageCreditsBalance,
+	otel.MetricOverageCreditsHasCredits,
+	otel.MetricOverageCreditsUnlimited,
+	otel.MetricOverageLimitReached,
+}
+
+var metricNames = append([]string{
 	otel.MetricUsageUsedPercent,
 	otel.MetricUsageRemainingPercent,
 	otel.MetricUsageResetUnixSeconds,
@@ -87,10 +103,14 @@ var metricNames = []string{
 	otel.MetricForecastEstimated90Unix,
 	otel.MetricForecastEstimated100Unix,
 	otel.MetricForecastConfidence,
-}
+}, creditMetricNames...)
 
 func (c Client) Fetch(ctx context.Context, now time.Time) (Snapshot, error) {
-	return c.fetch(ctx, now.Add(-c.Config.Lookback), now, true)
+	lookback := c.Config.Lookback
+	if lookback <= 0 {
+		lookback = 24 * time.Hour
+	}
+	return c.fetch(ctx, now.Add(-lookback), now, true)
 }
 
 // FetchHistory returns usage samples from OpenObserve rather than only the
@@ -141,6 +161,9 @@ func (c Client) fetch(ctx context.Context, start, now time.Time, latestOnly bool
 	results := make(chan result, len(metricNames))
 	var wg sync.WaitGroup
 	for _, name := range metricNames {
+		if !latestOnly && isCreditMetric(name) {
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -161,7 +184,11 @@ func (c Client) fetch(ctx context.Context, start, now time.Time, latestOnly bool
 		}
 		byMetric[result.name] = result.points
 	}
-	return assemble(byMetric, latestOnly), nil
+	out := assemble(byMetric, latestOnly)
+	if latestOnly {
+		out.Credits = assembleCredits(byMetric, now)
+	}
+	return out, nil
 }
 
 func (c Client) queryMetric(ctx context.Context, metric string, start, end time.Time) ([]metricPoint, error) {
@@ -171,8 +198,13 @@ func (c Client) queryMetric(ctx context.Context, metric string, start, end time.
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + "/api/" + url.PathEscape(c.Config.Organization) + "/_search"
 	base.RawQuery = "type=metrics"
+	columns := "_timestamp, provider, account_id, window, plan_type, source, value"
+	creditMetric := isCreditMetric(metric)
+	if creditMetric {
+		columns = "_timestamp, provider, account_id, value"
+	}
 	body := map[string]any{"query": map[string]any{
-		"sql":        fmt.Sprintf(`SELECT _timestamp, provider, account_id, window, plan_type, source, value FROM %q WHERE provider <> 'test' ORDER BY _timestamp DESC`, metric),
+		"sql":        fmt.Sprintf(`SELECT %s FROM %q WHERE provider <> 'test' ORDER BY _timestamp DESC`, columns, metric),
 		"start_time": start.UTC().UnixMicro(), "end_time": end.UTC().UnixMicro(), "from": 0, "size": 10000,
 	}}
 	payload, err := json.Marshal(body)
@@ -219,7 +251,7 @@ func (c Client) queryMetric(ctx context.Context, metric string, start, end time.
 			continue
 		}
 		value, err := hit.Value.Float64()
-		if err != nil || hit.Provider == "" || hit.Account == "" || hit.Window == "" {
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || hit.Provider == "" || hit.Account == "" || (!creditMetric && hit.Window == "") || timestamp < start.UnixMicro() || timestamp > end.UnixMicro() {
 			continue
 		}
 		points = append(points, metricPoint{Timestamp: timestamp, Provider: hit.Provider, Account: hit.Account, Window: hit.Window, PlanType: unknownToEmpty(hit.PlanType), Source: unknownToEmpty(hit.Source), Value: value})
@@ -250,6 +282,9 @@ func assemble(metrics map[string][]metricPoint, latestOnly bool) Snapshot {
 	}
 	rows := map[string]*values{}
 	for name, points := range metrics {
+		if isCreditMetric(name) {
+			continue
+		}
 		for _, point := range points {
 			key := point.Provider + "\x00" + point.Account + "\x00" + point.Window
 			if !latestOnly {
@@ -353,4 +388,54 @@ func unknownToEmpty(value string) string {
 		return ""
 	}
 	return value
+}
+
+func isCreditMetric(name string) bool {
+	for _, metric := range creditMetricNames {
+		if name == metric {
+			return true
+		}
+	}
+	return false
+}
+
+// Credits are account-level gauges. Require a complete flag cohort from one
+// export (allowing collection skew), and never carry an omitted balance
+// forward from an older export.
+func assembleCredits(metrics map[string][]metricPoint, now time.Time) map[Account]*provider.OverageCredits {
+	byAccount := map[Account]map[string]metricPoint{}
+	for _, name := range creditMetricNames {
+		for _, point := range metrics[name] {
+			account := Account{Provider: point.Provider, ID: point.Account}
+			if byAccount[account] == nil {
+				byAccount[account] = map[string]metricPoint{}
+			}
+			current, ok := byAccount[account][name]
+			if !ok || point.Timestamp > current.Timestamp {
+				byAccount[account][name] = point
+			}
+		}
+	}
+	out := map[Account]*provider.OverageCredits{}
+	for account, points := range byAccount {
+		has, ok := points[otel.MetricOverageCreditsHasCredits]
+		unlimited, uok := points[otel.MetricOverageCreditsUnlimited]
+		reached, rok := points[otel.MetricOverageLimitReached]
+		// The SDK collects instruments separately, so their timestamps can differ.
+		oldest := min(has.Timestamp, unlimited.Timestamp, reached.Timestamp)
+		newest := max(has.Timestamp, unlimited.Timestamp, reached.Timestamp)
+		observed := time.UnixMicro(oldest).UTC()
+		if !ok || !uok || !rok || newest-oldest > int64(2*time.Second/time.Microsecond) || now.Sub(observed) > 2*time.Minute || time.UnixMicro(newest).After(now) {
+			continue
+		}
+		if (has.Value != 0 && has.Value != 1) || (unlimited.Value != 0 && unlimited.Value != 1) || (reached.Value != 0 && reached.Value != 1) {
+			continue
+		}
+		credits := &provider.OverageCredits{HasCredits: has.Value == 1, Unlimited: unlimited.Value == 1, OverageLimitReached: reached.Value == 1, ObservedAt: &observed}
+		if balance, ok := points[otel.MetricOverageCreditsBalance]; ok && balance.Timestamp >= newest-int64(2*time.Second/time.Microsecond) && balance.Timestamp <= oldest+int64(2*time.Second/time.Microsecond) && now.Sub(time.UnixMicro(balance.Timestamp)) <= 2*time.Minute {
+			credits.Balance = strconv.FormatFloat(balance.Value, 'f', -1, 64)
+		}
+		out[account] = credits
+	}
+	return out
 }
