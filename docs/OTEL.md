@@ -196,3 +196,43 @@ Both gauges carry `provider`, configured `account_id`, and the fixed
 `source=configured`. Labels and individual grant dates are never attributes.
 These metrics describe configured deadlines and caps, not verified API grant
 balances or an inferred consumption order.
+
+### Reading overage credits from OpenObserve
+
+With `otel.read.mode = "openobserve"`, `status --json` and `forecast --json`
+include an account-level `overage_credits` object on each usage-window row:
+
+```json
+{
+  "overage_credits": {
+    "has_credits": true,
+    "unlimited": false,
+    "overage_limit_reached": false,
+    "balance": "62750",
+    "observed_at": "2026-11-09T12:00:00Z"
+  }
+}
+```
+
+Existing status row fields retain their names (`Provider`, `AccountID`,
+`WindowName`, `ObservedAt`, etc.); forecast rows use `provider`, `account_id`,
+`window_name`, etc. `once --json` carries the same credit object in each
+snapshot's existing `OverageCredits` field.
+
+Credit gauges are joined by `(provider, account_id)`, independently of windows.
+The reader requires all three boolean gauges within a two-second timestamp
+span (allowing SDK collection skew), inside `otel.read.lookback`, no more than two minutes before the read time,
+and not in the future. Flags must be `0` or `1`; zero is a valid observation.
+`observed_at` is the oldest of those flag timestamps in UTC. An absent stream, incomplete
+flag cohort, or stale cohort leaves credits nil (`overage_credits` is omitted
+from status/forecast JSON). Usage and forecasts remain available.
+
+Balance is optional and is included only within two seconds of every flag
+and no more than two minutes old;
+an older balance is never carried into a newer unlimited or balance-less
+observation. It is a decimal string reconstructed from the numeric gauge, so
+original decimal precision and trailing zeros cannot be recovered. A zero
+balance is `"0"`; negative balances are retained. The flags are never inferred
+from balance. Historical usage reads do not attach credit history; forecasts
+attach the latest fresh credit observation using the configured read lookback,
+independently of their `--since` history range.

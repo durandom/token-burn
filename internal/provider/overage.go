@@ -10,12 +10,13 @@ import (
 // Keep Balance as the provider's decimal string; its unit and expiry are not
 // inferred from local token logs or pricing tables.
 type OverageCredits struct {
-	HasCredits          bool   `json:"has_credits"`
-	Unlimited           bool   `json:"unlimited"`
-	OverageLimitReached bool   `json:"overage_limit_reached"`
-	Balance             string `json:"balance,omitempty"`
-	ApproxLocalMessages []int  `json:"approx_local_messages,omitempty"`
-	ApproxCloudMessages []int  `json:"approx_cloud_messages,omitempty"`
+	ObservedAt          *time.Time `json:"observed_at,omitempty"`
+	HasCredits          bool       `json:"has_credits"`
+	Unlimited           bool       `json:"unlimited"`
+	OverageLimitReached bool       `json:"overage_limit_reached"`
+	Balance             string     `json:"balance,omitempty"`
+	ApproxLocalMessages []int      `json:"approx_local_messages,omitempty"`
+	ApproxCloudMessages []int      `json:"approx_cloud_messages,omitempty"`
 }
 
 // NumericBalance is only for telemetry. Storage retains the exact decimal.

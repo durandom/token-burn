@@ -114,3 +114,112 @@ func TestAssembleHistoryKeepsExportTimestampsSeparate(t *testing.T) {
 		t.Fatalf("history samples = %#v", result.Samples)
 	}
 }
+
+func TestFetchOverageCredits(t *testing.T) {
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		flagSkew                time.Duration
+		missingStream           bool
+		name                    string
+		age, lookback           time.Duration
+		has, unlimited, reached float64
+		balance                 *float64
+		balanceAge              time.Duration
+		missingFlag             bool
+		want                    bool
+		wantBalance             string
+	}{
+		{name: "zero and independent flags", has: 0, reached: 1, balance: creditNumber(0), want: true, wantBalance: "0"},
+		{name: "negative balance", has: 1, balance: creditNumber(-12.5), want: true, wantBalance: "-12.5"},
+		{name: "unlimited without balance", unlimited: 1, want: true},
+		{name: "omitted balance is not carried forward", unlimited: 1, balance: creditNumber(40), balanceAge: time.Minute, want: true},
+		{name: "staleness boundary", age: 2 * time.Minute, want: true},
+		{name: "stale", age: 2*time.Minute + time.Microsecond},
+		{name: "outside lookback", age: time.Minute, lookback: 30 * time.Second},
+		{name: "incomplete flags", missingFlag: true},
+		{name: "invalid flag", has: 2},
+		{name: "collection skew", flagSkew: time.Millisecond, want: true},
+		{name: "different exports", flagSkew: 3 * time.Second},
+		{name: "missing streams", missingStream: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			observed := now.Add(-tc.age)
+			if tc.flagSkew != 0 {
+				observed = observed.Add(-time.Second * 10)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Query struct {
+						SQL string `json:"sql"`
+					} `json:"query"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					return
+				}
+				if tc.missingStream {
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"code":20003,"message":"stream not found"}`))
+					return
+				}
+				var hits []map[string]any
+				for name, value := range map[string]float64{
+					otel.MetricOverageCreditsHasCredits: tc.has,
+					otel.MetricOverageCreditsUnlimited:  tc.unlimited,
+					otel.MetricOverageLimitReached:      tc.reached,
+					otel.MetricOverageCreditsBalance:    0,
+				} {
+					if !strings.Contains(request.Query.SQL, `FROM "`+name+`"`) {
+						continue
+					}
+					if strings.Contains(request.Query.SQL, "window") {
+						t.Error("account gauge query selects window")
+					}
+					timestamp := observed
+					if name == otel.MetricOverageCreditsUnlimited {
+						timestamp = timestamp.Add(tc.flagSkew)
+					}
+					if name == otel.MetricOverageLimitReached && tc.missingFlag {
+						continue
+					}
+					if name == otel.MetricOverageCreditsBalance {
+						if tc.balance == nil {
+							continue
+						}
+						value = *tc.balance
+						timestamp = timestamp.Add(-tc.balanceAge)
+					}
+					// Deliberately return unfiltered rows: the reader must enforce bounds.
+					hits = append(hits, map[string]any{"_timestamp": timestamp.UnixMicro(), "provider": "codex", "account_id": "a", "value": value})
+					hits = append(hits, map[string]any{"_timestamp": now.Add(time.Minute).UnixMicro(), "provider": "codex", "account_id": "future", "value": value})
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"hits": hits})
+			}))
+			defer server.Close()
+			lookback := tc.lookback
+			if lookback == 0 {
+				lookback = time.Hour
+			}
+			client := Client{Config: config.OTelReadConfig{Endpoint: server.URL, Organization: "default", Lookback: lookback}, HTTPClient: server.Client()}
+			result, err := client.Fetch(context.Background(), now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			credits := result.Credits[Account{Provider: "codex", ID: "a"}]
+			if (credits != nil) != tc.want {
+				t.Fatalf("credits = %+v, want present %t", credits, tc.want)
+			}
+			if credits != nil && (credits.HasCredits != (tc.has == 1) || credits.Unlimited != (tc.unlimited == 1) || credits.OverageLimitReached != (tc.reached == 1) || credits.Balance != tc.wantBalance || credits.ObservedAt == nil || !credits.ObservedAt.Equal(observed)) {
+				t.Fatalf("credits = %+v", credits)
+			}
+			if result.Credits[Account{Provider: "codex", ID: "future"}] != nil {
+				t.Fatal("accepted future credits")
+			}
+			if len(result.Samples) != 0 {
+				t.Fatal("credit gauges created usage samples")
+			}
+		})
+	}
+}
+
+func creditNumber(value float64) *float64 { return &value }

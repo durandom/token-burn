@@ -181,3 +181,18 @@ The read-only TUI, `forecast`, and `resets` overlay a
 `configured_credit_capacity` object with `source=configured`, active grants,
 next expiry, and the amount expiring capped at the nonnegative live balance.
 The original configured amount is retained separately from each independent cap.
+
+In OpenObserve read mode, status and forecast rows expose the same
+`overage_credits` object with `has_credits` (boolean), `unlimited` (boolean),
+`overage_limit_reached` (boolean), optional `balance` (decimal string), and
+`observed_at` (UTC RFC3339 export timestamp). For example:
+`{"has_credits":true,"unlimited":false,"overage_limit_reached":false,"balance":"62750","observed_at":"2026-11-09T12:00:00Z"}`.
+This timestamp describes telemetry freshness, not an expiry or reset time.
+Credits are nil (the status/forecast field is omitted) without a complete flag
+cohort from one export inside the read lookback and at most two minutes old.
+A two-second timestamp skew is allowed between gauges; `observed_at` is the
+oldest flag timestamp. An optional balance must be within two seconds of each
+flag and no more than two minutes old. See [OTEL.md](OTEL.md#reading-overage-credits-from-openobserve)
+for the join and freshness rules. Local provider/storage JSON need not have
+`observed_at` inside the credit object; local observation time remains stored
+on its enclosing snapshot/row.

@@ -490,11 +490,11 @@ func newOnceCommand(configPath *string, verbose *bool) *cobra.Command {
 			}
 			var result onceResult
 			if cfg.OTel.Read.Mode == "openobserve" {
-				samples, err := latestStatusSamples(ctx, cfg, time.Now())
+				remote, err := latestStatusSnapshot(ctx, cfg, time.Now())
 				if err != nil {
 					return err
 				}
-				result = onceResult{Snapshots: snapshotsFromSamples(samples), Errors: []commandError{}}
+				result = onceResult{Snapshots: snapshotsFromSamples(remote), Errors: []commandError{}}
 			} else {
 				result = runOnce(ctx, cfg, diag)
 			}
@@ -538,17 +538,18 @@ func newStatusCommand(configPath *string) *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), cfg.HTTPTimeout)
 			defer cancel()
-			samples, err := latestStatusSamples(ctx, cfg, time.Now())
+			remote, err := latestStatusSnapshot(ctx, cfg, time.Now())
 			if err != nil {
 				return err
 			}
-			if samples == nil {
-				samples = []store.Sample{}
-			}
 			if jsonOut {
-				return writeJSON(cmd.OutOrStdout(), samples)
+				rows := make([]statusOutput, 0, len(remote.Samples))
+				for _, sample := range remote.Samples {
+					rows = append(rows, statusOutput{Sample: sample, OverageCredits: remote.Credits[otelread.Account{Provider: sample.Provider, ID: sample.AccountID}]})
+				}
+				return writeJSON(cmd.OutOrStdout(), rows)
 			}
-			printSamplesText(cmd.OutOrStdout(), samples)
+			printSamplesText(cmd.OutOrStdout(), remote.Samples)
 			return nil
 		},
 	}
@@ -556,10 +557,15 @@ func newStatusCommand(configPath *string) *cobra.Command {
 	return cmd
 }
 
-func latestStatusSamples(ctx context.Context, cfg config.Config, now time.Time) ([]store.Sample, error) {
+type statusOutput struct {
+	store.Sample
+	OverageCredits *usageprovider.OverageCredits `json:"overage_credits,omitempty"`
+}
+
+func latestStatusSnapshot(ctx context.Context, cfg config.Config, now time.Time) (otelread.Snapshot, error) {
 	if cfg.OTel.Read.Mode == "openobserve" {
 		remote, err := otelread.NewClient(cfg.OTel.Read).Fetch(ctx, now)
-		return remote.Samples, err
+		return remote, err
 	}
 	db, localErr := store.Open(ctx, cfg.DatabasePath)
 	var samples []store.Sample
@@ -586,13 +592,13 @@ func latestStatusSamples(ctx context.Context, cfg config.Config, now time.Time) 
 	}
 	localFresh := !latest.IsZero() && now.Sub(latest) <= staleAfter
 	if cfg.OTel.Read.Mode != "auto" || localFresh {
-		return samples, localErr
+		return otelread.Snapshot{Samples: samples}, localErr
 	}
 	remote, remoteErr := otelread.NewClient(cfg.OTel.Read).Fetch(ctx, now)
 	if remoteErr != nil && localErr != nil {
-		return nil, fmt.Errorf("local status: %v; OpenObserve fallback: %w", localErr, remoteErr)
+		return otelread.Snapshot{}, fmt.Errorf("local status: %v; OpenObserve fallback: %w", localErr, remoteErr)
 	}
-	return remote.Samples, remoteErr
+	return remote, remoteErr
 }
 
 func newHistoryCommand(configPath *string) *cobra.Command {
@@ -720,15 +726,16 @@ func historySamples(ctx context.Context, cfg config.Config, filter store.History
 	return db.History(ctx, filter)
 }
 
-func snapshotsFromSamples(samples []store.Sample) []usageprovider.Snapshot {
+func snapshotsFromSamples(remote otelread.Snapshot) []usageprovider.Snapshot {
 	byAccount := map[string]*usageprovider.Snapshot{}
 	keys := []string{}
-	for _, sample := range samples {
+	for _, sample := range remote.Samples {
 		key := sample.Provider + "\x00" + sample.AccountID
 		snapshot := byAccount[key]
 		if snapshot == nil {
 			keys = append(keys, key)
 			snapshot = &usageprovider.Snapshot{Provider: sample.Provider, AccountID: sample.AccountID, PlanType: sample.PlanType, Source: sample.Source, ObservedAt: sample.ObservedAt}
+			snapshot.OverageCredits = remote.Credits[otelread.Account{Provider: sample.Provider, ID: sample.AccountID}]
 			byAccount[key] = snapshot
 		}
 		if sample.ObservedAt.After(snapshot.ObservedAt) {
