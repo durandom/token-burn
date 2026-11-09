@@ -158,17 +158,30 @@ stay in SQLite and are available through `resets --json`.
 
 ## Overage-credit gauges
 
+All four gauges use only `provider` and configured `account_id` attributes,
+without account email or a per-window attribute.
+
 - `token_burn_overage_credits_balance`: the numeric value of the Codex API's
-  decimal credit balance, in provider credit units. Zero balances are exported;
+  decimal credit balance, in provider credit units (OTel unit `{credit}`).
+  Zero balances are exported;
   missing, non-finite, or invalid values are omitted. Negative balances reported
   by the provider are retained. OTel's float
   conversion may round; SQLite retains the original decimal string.
+- `token_burn_overage_credits_has_credits`: `1` when the API's `has_credits`
+  flag is true, otherwise `0` (unit `1`, dimensionless).
+- `token_burn_overage_credits_unlimited`: `1` when the API's `unlimited`
+  flag is true, otherwise `0` (unit `1`, dimensionless).
 - `token_burn_overage_limit_reached`: `1` when the API reports the overage limit
   reached, otherwise `0` when a credit object is present.
+  Unit `1` (dimensionless).
 
-Both gauges carry only `provider` and configured `account_id`. They are emitted
-from the existing usage poll; overage credits never contribute to reset-count
-metrics. An unlimited account without a numeric balance emits no balance sample.
+The three flags are emitted whenever `Snapshot.OverageCredits` is non-nil,
+including when all flags are false or the balance is unavailable. No overage
+gauges are recorded for a nil credit object. These flags are independent:
+readers must preserve the reported values rather than infer them from balance.
+They are emitted from the existing usage poll; overage credits never contribute
+to reset-count metrics. An unlimited account without a numeric balance emits
+no balance sample.
 No API expiry metric is emitted because no expiry source has been verified.
 
 ## Configured credit expiry

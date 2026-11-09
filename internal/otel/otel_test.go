@@ -2,6 +2,7 @@ package otel
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,9 @@ import (
 	"github.com/durandom/token-burn/internal/forecast"
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 	"go.opentelemetry.io/otel/attribute"
+	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 type record struct {
@@ -242,10 +246,13 @@ func TestOverageGaugesSeparateFromResetMetrics(t *testing.T) {
 		reached float64
 		gauges  int
 	}{
-		{"balance", &usageprovider.OverageCredits{Balance: "62750.0000000000", OverageLimitReached: true}, 62750, 1, 2},
-		{"zero", &usageprovider.OverageCredits{Balance: "0.0000000000"}, 0, 0, 2},
-		{"negative", &usageprovider.OverageCredits{Balance: "-10.5"}, -10.5, 0, 2},
-		{"unlimited", &usageprovider.OverageCredits{Unlimited: true}, 0, 0, 1},
+		{"balance", &usageprovider.OverageCredits{Balance: "62750.0000000000", HasCredits: true, OverageLimitReached: true}, 62750, 1, 4},
+		{"zero", &usageprovider.OverageCredits{Balance: "0.0000000000"}, 0, 0, 4},
+		{"negative", &usageprovider.OverageCredits{Balance: "-10.5"}, -10.5, 0, 4},
+		{"unlimited", &usageprovider.OverageCredits{Unlimited: true}, 0, 0, 3},
+		{"has credits without balance", &usageprovider.OverageCredits{HasCredits: true}, 0, 0, 3},
+		{"invalid balance", &usageprovider.OverageCredits{Balance: "invalid"}, 0, 0, 3},
+		{"non-finite balance", &usageprovider.OverageCredits{Balance: "NaN"}, 0, 0, 3},
 		{"unknown", nil, 0, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -254,11 +261,20 @@ func TestOverageGaugesSeparateFromResetMetrics(t *testing.T) {
 			if len(recorder.gauges) != tc.gauges {
 				t.Fatalf("gauge count %d", len(recorder.gauges))
 			}
-			if tc.gauges == 2 {
+			if tc.gauges == 4 {
 				assertGauge(t, recorder, MetricOverageCreditsBalance, tc.balance, nil)
 			}
 			if tc.gauges > 0 {
 				assertGauge(t, recorder, MetricOverageLimitReached, tc.reached, nil)
+				hasCredits, unlimited := 0.0, 0.0
+				if tc.credits.HasCredits {
+					hasCredits = 1
+				}
+				if tc.credits.Unlimited {
+					unlimited = 1
+				}
+				assertGauge(t, recorder, MetricOverageCreditsHasCredits, hasCredits, nil)
+				assertGauge(t, recorder, MetricOverageCreditsUnlimited, unlimited, nil)
 			}
 			for _, g := range recorder.gauges {
 				if len(g.attrs) != 2 || g.attrs["provider"] != "codex" || g.attrs["account_id"] != "local" {
@@ -294,5 +310,75 @@ func TestConfiguredCreditExpiryMetrics(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOTLPOverageMetrics(t *testing.T) {
+	requests := make(chan *collectormetricspb.ExportMetricsServiceRequest, 10)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var req collectormetricspb.ExportMetricsServiceRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		requests <- &req
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	exporter, err := NewOTLP(ctx, Config{Endpoint: server.URL, ExportInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer exporter.Shutdown(context.Background())
+	snap := usageprovider.Snapshot{Provider: "codex", AccountID: "local", OverageCredits: &usageprovider.OverageCredits{Balance: "42", HasCredits: true}}
+	collect := func() map[string]*metricspb.Metric {
+		t.Helper()
+		if err := exporter.ForceFlush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		metrics := map[string]*metricspb.Metric{}
+		// Exporters may skip an empty collection entirely.
+		for len(requests) > 0 {
+			req := <-requests
+			for _, rm := range req.ResourceMetrics {
+				for _, sm := range rm.ScopeMetrics {
+					for _, m := range sm.Metrics {
+						metrics[m.Name] = m
+					}
+				}
+			}
+		}
+		return metrics
+	}
+	EmitSnapshot(ctx, exporter, snap, time.Now())
+	metrics := collect()
+	for name, want := range map[string]float64{MetricOverageCreditsBalance: 42, MetricOverageCreditsHasCredits: 1, MetricOverageCreditsUnlimited: 0, MetricOverageLimitReached: 0} {
+		m := metrics[name]
+		if m == nil || len(m.GetGauge().GetDataPoints()) != 1 {
+			t.Fatalf("missing gauge %s", name)
+		}
+		point := m.GetGauge().DataPoints[0]
+		if point.GetAsDouble() != want {
+			t.Errorf("%s = %v, want %v", name, point.GetAsDouble(), want)
+		}
+		unit := "1"
+		if name == MetricOverageCreditsBalance {
+			unit = "{credit}"
+		}
+		if m.Unit != unit {
+			t.Errorf("%s unit = %q, want %q", name, m.Unit, unit)
+		}
+		if len(point.Attributes) != 2 {
+			t.Errorf("%s attributes = %v", name, point.Attributes)
+		}
 	}
 }

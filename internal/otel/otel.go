@@ -19,6 +19,8 @@ const (
 	MetricCreditSecondsToNextExpiry     = "token_burn_credit_seconds_to_next_expiry"
 	MetricCreditAmountExpiring          = "token_burn_credit_amount_expiring"
 	MetricOverageCreditsBalance         = "token_burn_overage_credits_balance"
+	MetricOverageCreditsHasCredits      = "token_burn_overage_credits_has_credits"
+	MetricOverageCreditsUnlimited       = "token_burn_overage_credits_unlimited"
 	MetricOverageLimitReached           = "token_burn_overage_limit_reached"
 	MetricResetsAvailable               = "token_burn_resets_available"
 	MetricResetsSecondsToNextExpiry     = "token_burn_resets_seconds_to_next_expiry"
@@ -145,6 +147,15 @@ func EmitSnapshot(ctx context.Context, recorder Recorder, snap usageprovider.Sna
 	capacity := forecast.Capacity(snap.Resets, credits, events, now)
 	attrs := []attribute.KeyValue{attribute.String("provider", snap.Provider), attribute.String("account_id", snap.AccountID)}
 	if c := snap.OverageCredits; c != nil {
+		hasCredits, unlimited := 0.0, 0.0
+		if c.HasCredits {
+			hasCredits = 1
+		}
+		if c.Unlimited {
+			unlimited = 1
+		}
+		recorder.RecordGauge(ctx, MetricOverageCreditsHasCredits, hasCredits, attrs...)
+		recorder.RecordGauge(ctx, MetricOverageCreditsUnlimited, unlimited, attrs...)
 		if balance, ok := c.NumericBalance(); ok {
 			recorder.RecordGauge(ctx, MetricOverageCreditsBalance, balance, attrs...)
 		}
@@ -235,7 +246,14 @@ func (e *Exporter) float64Gauge(name string) (metric.Float64Gauge, error) {
 	if gauge, ok := e.gauges[name]; ok {
 		return gauge, nil
 	}
-	gauge, err := e.meter.Float64Gauge(name)
+	var options []metric.Float64GaugeOption
+	switch name {
+	case MetricOverageCreditsBalance:
+		options = append(options, metric.WithUnit("{credit}"))
+	case MetricOverageCreditsHasCredits, MetricOverageCreditsUnlimited, MetricOverageLimitReached:
+		options = append(options, metric.WithUnit("1"))
+	}
+	gauge, err := e.meter.Float64Gauge(name, options...)
 	if err != nil {
 		return nil, err
 	}
