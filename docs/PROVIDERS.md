@@ -851,3 +851,37 @@ Relevant fields from the legacy `fetchAvailableModels` fallback:
   CLI process is running. `token-burn` intentionally stays process-free and
   calls the remote Cloud Code copy of the same endpoint instead, so no local
   process discovery or port scanning is required.
+
+## Claude Platform (Console prepaid credits)
+
+Opt-in provider `claude-platform`, separate from the `claude` subscription provider.
+Authentication is a manually imported Console `sessionKey` cookie, stored in
+macOS Keychain or a configured private credentials file. No API-key fallback is
+used: organization cost-report access does not confer Console billing access.
+
+GET-only endpoints on `https://platform.claude.com`:
+
+- `/api/organizations`: choose the only organization with capability `api`; if
+  several exist, require an explicit `provider_account_id`.
+- `/api/organizations/{uuid}/prepaid/credits`: total and grant balances. With an
+  explicit organization ID, organization discovery is skipped.
+
+The Console expects a browser-style User-Agent. Redirects are never followed,
+response bodies are bounded to 1 MiB, and neither HTTP bodies nor JSON decoder
+errors are included in diagnostics. HTTP 401/403 asks for a new Console session
+and billing access; 429 uses normal daemon rate-limit handling. Attempts are
+spaced by at least 15 minutes in the daemon, including failed attempts/restarts.
+
+The total uses `balance.credits.amount_minor` and `balance.credits.exponent`,
+falling back to top-level `amount` and exponent 2 for older payloads. Currency,
+integer amounts, and exponent (0–4) are validated. `tranches` and `promo_tranches`
+retain remaining/granted amounts, program, name, scope, and UTC expiry. Invalid
+optional expiry dates remain unknown. Totals are not recomputed from grants;
+expired/exhausted grants do not contribute to the displayed next expiry.
+
+Reference implementation and endpoint notes:
+https://github.com/steipete/CodexBar/blob/main/docs/claudeplatform.md
+
+Verified live on 2026-10-21: organization discovery and prepaid balance are
+accessible with a Console session. The same balance endpoint rejects API-key
+and bearer authentication, even for a key that reads the Admin cost-report API.

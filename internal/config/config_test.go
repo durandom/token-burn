@@ -224,3 +224,30 @@ func TestLoadWithoutServiceEnvSectionKeepsDefault(t *testing.T) {
 		t.Fatalf("Service.Env = %#v, want empty", cfg.Service.Env)
 	}
 }
+
+func TestLoadClaudePlatformAccount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	data := []byte(`
+[[accounts]]
+provider = "claude-platform"
+id = "claude-platform-default"
+provider_account_id = "195c921f-7fa1-49de-8a95-967076b3cd4d"
+credentials_file = "~/.config/token-burn/claude-platform.session"
+`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Accounts) != 1 {
+		t.Fatalf("accounts = %d, want 1", len(cfg.Accounts))
+	}
+	acct := cfg.Accounts[0]
+	if acct.Provider != "claude-platform" || acct.ID != "claude-platform-default" ||
+		acct.ProviderAccountID != "195c921f-7fa1-49de-8a95-967076b3cd4d" ||
+		acct.CredentialsFile != "~/.config/token-burn/claude-platform.session" {
+		t.Fatalf("unexpected account: %+v", acct)
+	}
+}

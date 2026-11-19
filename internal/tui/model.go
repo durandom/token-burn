@@ -55,6 +55,7 @@ type Model struct {
 	samples        []store.Sample
 	creditExpiry   map[string]*forecast.ConfiguredCreditCapacity
 	overageCredits map[string]*provider.OverageCredits
+	creditBalances map[string]*store.CreditBalanceSnapshot
 	capacities     map[string]forecast.ResetCapacity
 	forecasts      []forecastRow
 	statuses       map[string]accountPollStatus
@@ -68,6 +69,7 @@ type refreshMsg struct {
 	samples        []store.Sample
 	creditExpiry   map[string]*forecast.ConfiguredCreditCapacity
 	overageCredits map[string]*provider.OverageCredits
+	creditBalances map[string]*store.CreditBalanceSnapshot
 	capacities     map[string]forecast.ResetCapacity
 	forecasts      []forecastRow
 	statuses       map[string]accountPollStatus
@@ -158,6 +160,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.samples = msg.samples
 		m.creditExpiry = msg.creditExpiry
 		m.overageCredits = msg.overageCredits
+		m.creditBalances = msg.creditBalances
 		m.capacities = msg.capacities
 		m.forecasts = msg.forecasts
 		m.statuses = msg.statuses
@@ -376,6 +379,13 @@ func (m Model) renderUsage(layout usageLayout) string {
 			}
 		}
 	}
+	for key, c := range m.creditBalances {
+		if c != nil {
+			if _, ok := grouped[key]; !ok {
+				grouped[key] = nil
+			}
+		}
+	}
 	for key, c := range m.overageCredits {
 		if c != nil {
 			if _, ok := grouped[key]; !ok {
@@ -393,6 +403,14 @@ func (m Model) renderUsage(layout usageLayout) string {
 	forecasts := map[string]forecastRow{}
 	for _, row := range m.forecasts {
 		forecasts[forecastKey(row.Provider, row.Account, row.Window)] = row
+	}
+	for _, acct := range m.cfg.Accounts {
+		if acct.Provider == "claude-platform" {
+			key := accountKey(acct.Provider, acct.ID)
+			if _, ok := grouped[key]; !ok {
+				grouped[key] = nil
+			}
+		}
 	}
 	keys := sortedKeys(grouped)
 
@@ -414,6 +432,33 @@ func (m Model) renderUsage(layout usageLayout) string {
 				used = c.LastUsed.Local().Format("Jan 02 15:04")
 			}
 			b.WriteString(fmt.Sprintf("\n  resets owned %d · next expiry %s · last used %s", *c.OwnedResets, expiry, used))
+		}
+		if c := m.creditBalances[key]; c != nil {
+			line := "API balance " + c.Credits.Balance.String()
+			if expiry := c.Credits.NextExpiry(now); expiry != nil {
+				line += " · next expiry " + expiry.Local().Format("Jan 02 2006")
+			}
+			line += " · observed " + c.ObservedAt.Local().Format("Jan 02 15:04")
+			b.WriteString("\n  " + line)
+			for _, grant := range c.Credits.Grants {
+				label := grant.Name
+				if label == "" {
+					label = strings.ReplaceAll(grant.Program, "_", " ")
+				}
+				if label == "" {
+					label = "credit grant"
+				}
+				line := label + ": " + grant.Remaining.String() + " remaining"
+				if grant.Granted != nil {
+					line += " of " + grant.Granted.String()
+				}
+				if grant.ExpiresAt != nil {
+					line += " · expires " + grant.ExpiresAt.Local().Format("Jan 02 2006 15:04")
+				} else {
+					line += " · expiry unknown"
+				}
+				b.WriteString("\n  " + line)
+			}
 		}
 		if line := creditLine(m.overageCredits[key], m.creditExpiry[key]); line != "" {
 			b.WriteString("\n  " + line)
@@ -595,6 +640,8 @@ func pollFailureAction(run store.PollRun) string {
 	provider := strings.ToLower(strings.TrimSpace(run.Provider))
 	code := strings.TrimSpace(run.ErrorCode)
 	switch {
+	case provider == "claude-platform" && (code == "auth_expired" || code == "auth_missing"):
+		return "Console login required; reimport sessionKey"
 	case provider == "antigravity" && code == "auth_expired":
 		return "run: agy models"
 	case provider == "copilot" && code == "auth_missing":
@@ -670,10 +717,17 @@ func localRefresh(ctx context.Context, cfg config.Config, now time.Time) refresh
 	pollStatus := map[string]accountPollStatus{}
 	capacities := map[string]forecast.ResetCapacity{}
 	overageCredits := map[string]*provider.OverageCredits{}
+	creditBalances := map[string]*store.CreditBalanceSnapshot{}
 	creditExpiry := map[string]*forecast.ConfiguredCreditCapacity{}
 
 	var samples []store.Sample
 	for _, acct := range cfg.Accounts {
+		credit, err := db.LatestCreditBalance(ctx, acct.Provider, acct.ID)
+		if err != nil {
+			errors = append(errors, err.Error())
+		} else {
+			creditBalances[accountKey(acct.Provider, acct.ID)] = credit
+		}
 		credits, err := db.LatestOverageCredits(ctx, acct.Provider, acct.ID)
 		if err != nil {
 			errors = append(errors, err.Error())
@@ -721,6 +775,7 @@ func localRefresh(ctx context.Context, cfg config.Config, now time.Time) refresh
 		samples:        samples,
 		capacities:     capacities,
 		overageCredits: overageCredits,
+		creditBalances: creditBalances,
 		creditExpiry:   creditExpiry,
 		forecasts:      forecasts,
 		statuses:       pollStatus,
@@ -1266,6 +1321,16 @@ func max(a, b int) int {
 }
 
 func (m Model) hasCapacity() bool {
+	for _, acct := range m.cfg.Accounts {
+		if acct.Provider == "claude-platform" {
+			return true
+		}
+	}
+	for _, c := range m.creditBalances {
+		if c != nil {
+			return true
+		}
+	}
 	for _, c := range m.creditExpiry {
 		if c != nil {
 			return true

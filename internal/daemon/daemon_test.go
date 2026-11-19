@@ -690,3 +690,26 @@ func (e errString) Error() string {
 func intPtr(value int) *int {
 	return &value
 }
+
+func TestConsolePollCadencePersistsAcrossCalls(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, t.TempDir()+"/state.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	client := &countingProvider{}
+	opts := Options{Config: config.Config{HTTPTimeout: time.Second, PollInterval: time.Minute, Accounts: []config.Account{{Provider: "claude-platform", ID: "console"}}}, Now: func() time.Time { return now }, Providers: map[string]usageprovider.Provider{"claude-platform": client}}
+	for _, offset := range []time.Duration{0, time.Minute, 14 * time.Minute, 15 * time.Minute, 16 * time.Minute, 29 * time.Minute, 30 * time.Minute} {
+		at := now.Add(offset)
+		copy := opts
+		copy.Now = func() time.Time { return at }
+		if _, err := PollOnce(ctx, db, copy); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if client.calls != 3 {
+		t.Fatalf("polls=%d, want 3", client.calls)
+	}
+}
