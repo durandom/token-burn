@@ -256,3 +256,98 @@ func TestCapacityCommandsReadSelectedMode(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenObserveCommandsWithMissingAccountStreams(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		wantError string
+	}{
+		{name: "missing streams"},
+		{name: "other server error", wantError: "Search stream not found: unrelated_stream"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			observed := time.Now().Add(-time.Second)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Query struct {
+						SQL string `json:"sql"`
+					} `json:"query"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				_, from, _ := strings.Cut(req.Query.SQL, `FROM "`)
+				metric, _, _ := strings.Cut(from, `"`)
+				if strings.HasPrefix(metric, "token_burn_resets_") || strings.HasPrefix(metric, "token_burn_overage_") {
+					message := "Search stream not found: " + metric
+					if metric == "token_burn_overage_credits_unlimited" && tc.wantError != "" {
+						message = tc.wantError
+					}
+					w.WriteHeader(http.StatusInternalServerError)
+					_ = json.NewEncoder(w).Encode(map[string]any{"code": 500, "message": message})
+					return
+				}
+				var hits []map[string]any
+				if metric == "token_burn_usage_used_percent" {
+					hits = append(hits, map[string]any{"_timestamp": observed.UnixMicro(), "provider": "codex", "account_id": "a", "window": "five_hour", "value": 30})
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"hits": hits})
+			}))
+			defer server.Close()
+
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.toml")
+			cfg := fmt.Sprintf("database_path=%q\n[[accounts]]\nprovider=\"codex\"\nid=\"a\"\n[otel.read]\nmode=\"openobserve\"\nendpoint=%q\norganization=\"default\"\n", dir, server.URL)
+			if err := os.WriteFile(cfgPath, []byte(cfg), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for _, command := range []string{"status", "forecast", "resets"} {
+				t.Run(command, func(t *testing.T) {
+					cmd := NewRootCommand(BuildInfo{})
+					var out bytes.Buffer
+					cmd.SetOut(&out)
+					cmd.SetErr(&out)
+					cmd.SetArgs([]string{"--config", cfgPath, command, "--json"})
+					err := cmd.Execute()
+					if tc.wantError != "" {
+						want := "query OpenObserve metric token_burn_overage_credits_unlimited: " + tc.wantError
+						if err == nil || err.Error() != want {
+							t.Fatalf("error = %v, want %q", err, want)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					var rows []map[string]json.RawMessage
+					if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
+						t.Fatal(err)
+					}
+					if len(rows) != 1 {
+						t.Fatalf("expected one row, got %s", out.String())
+					}
+					row := rows[0]
+					if row["reset_capacity"] != nil || row["overage_credits"] != nil {
+						t.Fatalf("unexpected capacity data in %s", out.String())
+					}
+					switch command {
+					case "status":
+						if string(row["WindowName"]) != `"five_hour"` || string(row["UsedPercent"]) != "30" {
+							t.Fatalf("unexpected usage row %s", out.String())
+						}
+					case "forecast":
+						if string(row["window_name"]) != `"five_hour"` {
+							t.Fatalf("unexpected forecast row %s", out.String())
+						}
+					case "resets":
+						if string(row["account_id"]) != `"a"` {
+							t.Fatalf("unexpected resets row %s", out.String())
+						}
+					}
+				})
+			}
+		})
+	}
+}

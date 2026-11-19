@@ -239,10 +239,10 @@ func (c Client) queryMetric(ctx context.Context, metric string, start, end time.
 		return nil, fmt.Errorf("decode OpenObserve response for %s: %w", metric, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || decoded.Code != 0 {
-		if decoded.Code == 20003 {
+		message := strings.TrimSpace(decoded.Message)
+		if decoded.Code == 20003 || message == "Search stream not found: "+metric {
 			return nil, nil
 		}
-		message := strings.TrimSpace(decoded.Message)
 		if message == "" {
 			message = resp.Status
 		}
