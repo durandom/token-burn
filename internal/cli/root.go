@@ -545,7 +545,7 @@ func newStatusCommand(configPath *string) *cobra.Command {
 			if jsonOut {
 				rows := make([]statusOutput, 0, len(remote.Samples))
 				for _, sample := range remote.Samples {
-					rows = append(rows, statusOutput{Sample: sample, OverageCredits: remote.Credits[otelread.Account{Provider: sample.Provider, ID: sample.AccountID}]})
+					rows = append(rows, statusOutput{Sample: sample, OverageCredits: remote.Credits[otelread.Account{Provider: sample.Provider, ID: sample.AccountID}], ResetCapacity: remote.Resets[otelread.Account{Provider: sample.Provider, ID: sample.AccountID}]})
 				}
 				return writeJSON(cmd.OutOrStdout(), rows)
 			}
@@ -559,6 +559,7 @@ func newStatusCommand(configPath *string) *cobra.Command {
 
 type statusOutput struct {
 	store.Sample
+	ResetCapacity  *forecast.ResetCapacity       `json:"reset_capacity,omitempty"`
 	OverageCredits *usageprovider.OverageCredits `json:"overage_credits,omitempty"`
 }
 
@@ -592,7 +593,20 @@ func latestStatusSnapshot(ctx context.Context, cfg config.Config, now time.Time)
 	}
 	localFresh := !latest.IsZero() && now.Sub(latest) <= staleAfter
 	if cfg.OTel.Read.Mode != "auto" || localFresh {
-		return otelread.Snapshot{Samples: samples}, localErr
+		if localErr != nil {
+			return otelread.Snapshot{}, localErr
+		}
+		rows, err := loadResetOutputs(ctx, cfg, "", "", now)
+		if err != nil {
+			return otelread.Snapshot{}, err
+		}
+		out := otelread.Snapshot{Samples: samples, Credits: map[otelread.Account]*usageprovider.OverageCredits{}, Resets: map[otelread.Account]*forecast.ResetCapacity{}}
+		for _, row := range rows {
+			key := otelread.Account{Provider: row.Provider, ID: row.AccountID}
+			out.Credits[key] = row.OverageCredits
+			out.Resets[key] = row.ResetCapacity
+		}
+		return out, nil
 	}
 	remote, remoteErr := otelread.NewClient(cfg.OTel.Read).Fetch(ctx, now)
 	if remoteErr != nil && localErr != nil {

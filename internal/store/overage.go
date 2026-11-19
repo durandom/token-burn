@@ -71,7 +71,8 @@ func (s *Store) OverageCreditHistory(ctx context.Context, name, account string) 
 }
 func (s *Store) LatestOverageCredits(ctx context.Context, name, account string) (*provider.OverageCredits, error) {
 	var data sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT data FROM overage_credit_snapshots WHERE provider=? AND account_id=? ORDER BY observed_at DESC LIMIT 1`, name, account).Scan(&data)
+	var observed string
+	err := s.db.QueryRowContext(ctx, `SELECT observed_at,data FROM overage_credit_snapshots WHERE provider=? AND account_id=? ORDER BY observed_at DESC LIMIT 1`, name, account).Scan(&observed, &data)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -85,5 +86,10 @@ func (s *Store) LatestOverageCredits(ctx context.Context, name, account string) 
 	if err := json.Unmarshal([]byte(data.String), &out); err != nil {
 		return nil, err
 	}
+	at, err := parseTime(observed)
+	if err != nil {
+		return nil, err
+	}
+	out.ObservedAt = &at
 	return &out, nil
 }

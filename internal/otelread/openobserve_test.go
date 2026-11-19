@@ -223,3 +223,97 @@ func TestFetchOverageCredits(t *testing.T) {
 }
 
 func creditNumber(value float64) *float64 { return &value }
+
+func TestFetchResetCapacity(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name                                 string
+		age, optionalSkew                    time.Duration
+		count                                float64
+		missing, missingStream, omitOptional bool
+		want, wantOptional                   bool
+	}{
+		{name: "full", count: 2, want: true, wantOptional: true},
+		{name: "zero", count: 0, want: true, wantOptional: true},
+		{name: "boundary", age: 2 * time.Minute, count: 1, want: true, wantOptional: true},
+		{name: "stale", age: 2*time.Minute + time.Microsecond, count: 1},
+		{name: "future", age: -time.Second, count: 1},
+		{name: "missing count", missing: true},
+		{name: "missing streams", missingStream: true},
+		{name: "negative count", count: -1},
+		{name: "fractional count", count: 1.5},
+		{name: "optional omitted", count: 1, omitOptional: true, want: true},
+		{name: "older optional export", count: 1, optionalSkew: -3 * time.Second, want: true},
+		{name: "collection skew", age: time.Second, count: 1, optionalSkew: time.Millisecond, want: true, wantOptional: true},
+		{name: "future optional", count: 1, optionalSkew: time.Second, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			observed := now.Add(-tc.age)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Query struct {
+						SQL string `json:"sql"`
+					} `json:"query"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+					return
+				}
+				if tc.missingStream {
+					w.WriteHeader(400)
+					_, _ = w.Write([]byte(`{"code":20003}`))
+					return
+				}
+				hits := []map[string]any{}
+				for name, value := range map[string]float64{otel.MetricResetsAvailable: tc.count, otel.MetricResetsSecondsToNextExpiry: 3600, otel.MetricResetsLastUsedUnixSeconds: float64(now.Add(-time.Hour).Unix())} {
+					if !strings.Contains(req.Query.SQL, `FROM "`+name+`"`) {
+						continue
+					}
+					if strings.Contains(req.Query.SQL, "window") {
+						t.Error("account metric requested window")
+					}
+					at := observed
+					if name == otel.MetricResetsAvailable {
+						if tc.missing {
+							continue
+						}
+					} else {
+						if tc.omitOptional {
+							continue
+						}
+						at = at.Add(tc.optionalSkew)
+					}
+					hits = append(hits, map[string]any{"_timestamp": at.UnixMicro(), "provider": "claude", "account_id": "a", "value": value})
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"hits": hits})
+			}))
+			defer server.Close()
+			client := Client{Config: config.OTelReadConfig{Endpoint: server.URL, Organization: "default", Lookback: time.Hour}, HTTPClient: server.Client()}
+			result, err := client.Fetch(context.Background(), now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := result.Resets[Account{Provider: "claude", ID: "a"}]
+			if (c != nil) != tc.want {
+				t.Fatalf("capacity=%+v want present %t", c, tc.want)
+			}
+			if c != nil {
+				if c.OwnedResets == nil || *c.OwnedResets != int(tc.count) || c.ObservedAt == nil || !c.ObservedAt.Equal(observed) {
+					t.Fatalf("capacity=%+v", c)
+				}
+				if (c.LastUsed != nil) != tc.wantOptional || (c.NextExpiry != nil) != (tc.wantOptional && tc.count > 0) {
+					t.Fatalf("optional capacity=%+v", c)
+				}
+				if c.NextExpiry != nil && !c.NextExpiry.Equal(observed.Add(tc.optionalSkew).Add(time.Hour)) {
+					t.Fatal("expiry was not anchored to its observation")
+				}
+				if c.LastUsed != nil && !c.LastUsed.Equal(now.Add(-time.Hour)) {
+					t.Fatal("last_used was not absolute")
+				}
+			}
+			if len(result.Samples) != 0 || len(result.Forecasts) != 0 || result.Resets[Account{Provider: "claude", ID: "b"}] != nil {
+				t.Fatal("capacity leaked into usage or another account")
+			}
+		})
+	}
+}

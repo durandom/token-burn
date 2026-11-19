@@ -7,6 +7,7 @@ import (
 )
 
 type ResetCapacity struct {
+	ObservedAt  *time.Time `json:"observed_at,omitempty"`
 	OwnedResets *int       `json:"owned_resets"`
 	NextExpiry  *time.Time `json:"next_expiry"`
 	LastUsed    *time.Time `json:"last_used"`

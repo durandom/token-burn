@@ -21,31 +21,20 @@ func newResetsCommand(configPath *string) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		db, err := store.Open(cmd.Context(), cfg.DatabasePath)
+		ctx, cancel := context.WithTimeout(cmd.Context(), cfg.HTTPTimeout)
+		defer cancel()
+		out, err := loadResetOutputs(ctx, cfg, name, account, time.Now())
 		if err != nil {
 			return err
-		}
-		defer db.Close()
-		out := []resetOutput{}
-		for _, a := range cfg.Accounts {
-			if (name != "" && name != a.Provider) || (account != "" && account != a.ID) {
-				continue
-			}
-			h, err := db.ResetHistory(cmd.Context(), a.Provider, a.ID)
-			if err != nil {
-				return err
-			}
-			live, err := db.LatestOverageCredits(cmd.Context(), a.Provider, a.ID)
-			if err != nil {
-				return err
-			}
-			out = append(out, resetOutput{ResetHistory: h, OverageCredits: live, ConfiguredCreditCapacity: forecast.CreditExpiry(cfg.CreditGrants[a.Provider], live, time.Now())})
 		}
 		if jsonOut {
 			return writeJSON(cmd.OutOrStdout(), out)
 		}
 		for _, h := range out {
 			c := forecast.Capacity(h.Summary, h.Credits, h.Events, time.Now())
+			if h.ResetCapacity != nil {
+				c = *h.ResetCapacity
+			}
 			owned := "unknown"
 			if c.OwnedResets != nil {
 				owned = fmt.Sprint(*c.OwnedResets)
@@ -99,6 +88,7 @@ func attachStoredCapacity(ctx context.Context, cfg config.Config, results []fore
 		for i := range results {
 			r := &results[i]
 			r.OverageCredits = remote.Credits[otelread.Account{Provider: r.Provider, ID: r.AccountID}]
+			r.ResetCapacity = remote.Resets[otelread.Account{Provider: r.Provider, ID: r.AccountID}]
 			r.ConfiguredCreditCapacity = forecast.CreditExpiry(cfg.CreditGrants[r.Provider], r.OverageCredits, now)
 		}
 		return nil
@@ -121,6 +111,7 @@ func attachStoredCapacity(ctx context.Context, cfg config.Config, results []fore
 		r.ConfiguredCreditCapacity = forecast.CreditExpiry(cfg.CreditGrants[r.Provider], r.OverageCredits, now)
 		if h.Summary != nil {
 			c := forecast.Capacity(h.Summary, h.Credits, h.Events, now)
+			c.ObservedAt = h.ObservedAt
 			r.ResetCapacity = &c
 		}
 	}
@@ -139,6 +130,7 @@ func overageBalanceText(c *provider.OverageCredits) string {
 
 type resetOutput struct {
 	store.ResetHistory
+	ResetCapacity            *forecast.ResetCapacity            `json:"reset_capacity,omitempty"`
 	OverageCredits           *provider.OverageCredits           `json:"overage_credits,omitempty"`
 	ConfiguredCreditCapacity *forecast.ConfiguredCreditCapacity `json:"configured_credit_capacity,omitempty"`
 }
@@ -148,4 +140,52 @@ func creditAmountText(amount *float64) string {
 		return "unknown"
 	}
 	return fmt.Sprintf("%g", *amount)
+}
+
+// Remote reads expose the reconstructible account capacity only. The detailed
+// credit/event history remains local and is never mixed into a remote cohort.
+func loadResetOutputs(ctx context.Context, cfg config.Config, name, account string, now time.Time) ([]resetOutput, error) {
+	out := []resetOutput{}
+	var remote otelread.Snapshot
+	var db *store.Store
+	var err error
+	if cfg.OTel.Read.Mode == "openobserve" {
+		remote, err = otelread.NewClient(cfg.OTel.Read).Fetch(ctx, now)
+	} else {
+		db, err = store.Open(ctx, cfg.DatabasePath)
+		if err == nil {
+			defer db.Close()
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range cfg.Accounts {
+		if (name != "" && name != a.Provider) || (account != "" && account != a.ID) {
+			continue
+		}
+		row := resetOutput{ResetHistory: store.ResetHistory{Provider: a.Provider, AccountID: a.ID, Credits: []provider.ResetCredit{}, Events: []provider.ResetEvent{}}}
+		if db == nil {
+			key := otelread.Account{Provider: a.Provider, ID: a.ID}
+			row.ResetCapacity = remote.Resets[key]
+			row.OverageCredits = remote.Credits[key]
+		} else {
+			row.ResetHistory, err = db.ResetHistory(ctx, a.Provider, a.ID)
+			if err != nil {
+				return nil, err
+			}
+			row.OverageCredits, err = db.LatestOverageCredits(ctx, a.Provider, a.ID)
+			if err != nil {
+				return nil, err
+			}
+			if row.Summary != nil {
+				c := forecast.Capacity(row.Summary, row.Credits, row.Events, now)
+				c.ObservedAt = row.ObservedAt
+				row.ResetCapacity = &c
+			}
+		}
+		row.ConfiguredCreditCapacity = forecast.CreditExpiry(cfg.CreditGrants[a.Provider], row.OverageCredits, now)
+		out = append(out, row)
+	}
+	return out, nil
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -135,5 +136,60 @@ func TestInvalidResetSnapshotRollsBackUsage(t *testing.T) {
 	}
 	if len(samples) != 0 {
 		t.Fatal("partial snapshot committed")
+	}
+}
+
+func TestMigrateResetCapacityObservation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		summary any
+		want    bool
+	}{
+		{"known summary", `{"available_count":2}`, true},
+		{"failed detail only", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "legacy.db")
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, m := range migrations {
+				if m.version >= 5 {
+					continue
+				}
+				if _, err := db.Exec(m.sql); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(`INSERT INTO schema_migrations VALUES (?,?)`, m.version, "2026-11-19T12:00:00Z"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			observed := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+			if _, err := db.Exec(`INSERT INTO reset_state(provider,account_id,summary,observed_at) VALUES ('codex','a',?,?)`, tc.summary, formatTime(observed)); err != nil {
+				t.Fatal(err)
+			}
+			db.Close()
+			upgraded, err := Open(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer upgraded.Close()
+			h, err := upgraded.ResetHistory(ctx, "codex", "a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (h.ObservedAt != nil) != tc.want {
+				t.Fatalf("observation=%v", h.ObservedAt)
+			}
+			if h.ObservedAt != nil && (!h.ObservedAt.Equal(observed) || h.ObservedAt.Location() != time.UTC) {
+				t.Fatalf("observation=%v", h.ObservedAt)
+			}
+		})
 	}
 }
