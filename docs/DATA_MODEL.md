@@ -155,7 +155,8 @@ Normalized JSON and program metadata always pass through the secret redactor.
 These fields are part of the data model and do not require `--raw-json`.
 
 `token-burn resets [--provider codex|claude] [--account <id>] [--json]` reads the
-local store only. Text lists credits, grant/use events, and plan periods; JSON
+local store in SQLite mode and reconstructs account capacity from exported
+gauges in OpenObserve mode. Text lists credits, grant/use events, and plan periods; JSON
 also includes program flags, breakdowns, coverage, polling errors, and the detail
 attempt time. The TUI reads owned resets, next expiry, and last use from SQLite.
 `forecast` includes reset capacity when known, without assuming redemption in
@@ -196,3 +197,57 @@ flag and no more than two minutes old. See [OTEL.md](OTEL.md#reading-overage-cre
 for the join and freshness rules. Local provider/storage JSON need not have
 `observed_at` inside the credit object; local observation time remains stored
 on its enclosing snapshot/row.
+
+
+## Dated account capacity (migration 5)
+
+`reset_state.capacity_observed_at` stores the UTC observation time of the latest
+provider reset summary. It advances only with a reported summary, so a newer
+usage-only poll or failed detail attempt cannot make retained capacity look
+newly observed. Migration 5 initializes existing summaries from their stored
+`observed_at` (the best timestamp available for legacy rows). The separate
+`reset_state.observed_at` continues to guard out-of-order state updates.
+`ResetHistory.observed_at` exposes the capacity observation timestamp.
+
+Both read modes attach these account-level objects to `status --json`,
+`forecast --json`, and `resets --json` rows, independently of usage-window dates:
+
+```json
+{
+  "overage_credits": {
+    "has_credits": true,
+    "unlimited": false,
+    "overage_limit_reached": false,
+    "balance": "62750.0000000000",
+    "observed_at": "2026-11-19T11:59:00Z"
+  },
+  "reset_capacity": {
+    "owned_resets": 2,
+    "next_expiry": "2026-11-20T12:00:00Z",
+    "last_used": "2026-11-18T09:00:00Z",
+    "observed_at": "2026-11-19T12:00:00Z"
+  }
+}
+```
+
+Local credit reads populate `observed_at` from the `overage_credit_snapshots`
+row, including rows written before this change. The source decimal balance
+remains a string. Reset capacity uses `capacity_observed_at`; `next_expiry` and
+`last_used` are absolute dates, never relative durations, and remain `null` when
+unknown. All timestamps use UTC RFC3339. Absent capacity/credits objects are
+omitted, rather than implying zero capacity. Existing JSON names are preserved.
+
+Remote reads reconstruct reset capacity from the available count, expiry
+seconds, and `token_burn_resets_last_used_unix_seconds` account gauges. Remote
+`observed_at` is the count's export timestamp; optional gauges must belong to
+the same export cohort (two-second collection skew). The expiry timestamp is
+its gauge observation time plus exported seconds. Missing/stale/future count
+samples produce no capacity; optional missing/stale/future samples produce
+`null` fields. Remote capacity and credits have independent freshness checks;
+neither uses a usage-window timestamp. Full rules are in
+[OTEL.md](OTEL.md#dated-capacity-in-cli-json).
+
+Remote `resets --json` uses this same reconstruction with no SQLite access.
+Detailed credit/event/plan history cannot be rebuilt from gauges and remains
+empty or null in that mode; the existing fields retain their names. Local
+`resets --json` retains the detailed history and adds `reset_capacity`.

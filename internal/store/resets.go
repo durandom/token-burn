@@ -101,6 +101,11 @@ func insertResets(ctx context.Context, tx *sql.Tx, snap provider.Snapshot) error
 	if err != nil {
 		return err
 	}
+	if snap.Resets != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE reset_state SET capacity_observed_at=? WHERE provider=? AND account_id=?`, formatTime(snap.ObservedAt), snap.Provider, snap.AccountID); err != nil {
+			return err
+		}
+	}
 	if snap.ResetDetails != nil {
 		events := append([]provider.ResetEvent(nil), snap.ResetDetails.Events...)
 		for _, c := range snap.ResetDetails.Credits {
@@ -178,6 +183,7 @@ func insertResets(ctx context.Context, tx *sql.Tx, snap provider.Snapshot) error
 }
 
 type ResetHistory struct {
+	ObservedAt       *time.Time                `json:"observed_at,omitempty"`
 	Provider         string                    `json:"provider"`
 	AccountID        string                    `json:"account_id"`
 	Summary          *provider.ResetSummary    `json:"summary"`
@@ -191,8 +197,8 @@ type ResetHistory struct {
 
 func (s *Store) ResetHistory(ctx context.Context, name, account string) (ResetHistory, error) {
 	out := ResetHistory{Provider: name, AccountID: account, Credits: []provider.ResetCredit{}, Events: []provider.ResetEvent{}}
-	var summary, metadata, plans, attempted, detailErrors sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT summary,metadata,plan_metadata,attempted_at,detail_errors FROM reset_state WHERE provider=? AND account_id=?`, name, account).Scan(&summary, &metadata, &plans, &attempted, &detailErrors)
+	var summary, metadata, plans, attempted, detailErrors, observed sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT summary,metadata,plan_metadata,attempted_at,detail_errors,capacity_observed_at FROM reset_state WHERE provider=? AND account_id=?`, name, account).Scan(&summary, &metadata, &plans, &attempted, &detailErrors, &observed)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return out, err
 	}
@@ -210,6 +216,13 @@ func (s *Store) ResetHistory(ctx context.Context, name, account string) (ResetHi
 		if err := json.Unmarshal([]byte(detailErrors.String), &out.Errors); err != nil {
 			return out, err
 		}
+	}
+	if observed.Valid {
+		at, err := parseTime(observed.String)
+		if err != nil {
+			return out, err
+		}
+		out.ObservedAt = &at
 	}
 	if attempted.Valid {
 		t, err := parseTime(attempted.String)

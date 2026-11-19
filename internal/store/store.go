@@ -158,6 +158,8 @@ CREATE TABLE IF NOT EXISTS daemon_state (
 	},
 	{version: 3, sql: resetSchema},
 	{version: 4, sql: overageSchema},
+	{version: 5, sql: `ALTER TABLE reset_state ADD COLUMN capacity_observed_at TEXT;
+ UPDATE reset_state SET capacity_observed_at=observed_at WHERE summary IS NOT NULL;`},
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {

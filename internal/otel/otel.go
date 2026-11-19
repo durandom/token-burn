@@ -22,6 +22,7 @@ const (
 	MetricOverageCreditsHasCredits      = "token_burn_overage_credits_has_credits"
 	MetricOverageCreditsUnlimited       = "token_burn_overage_credits_unlimited"
 	MetricOverageLimitReached           = "token_burn_overage_limit_reached"
+	MetricResetsLastUsedUnixSeconds     = "token_burn_resets_last_used_unix_seconds"
 	MetricResetsAvailable               = "token_burn_resets_available"
 	MetricResetsSecondsToNextExpiry     = "token_burn_resets_seconds_to_next_expiry"
 	MetricUsageUsedPercent              = "token_burn_usage_used_percent"
@@ -170,6 +171,10 @@ func EmitSnapshot(ctx context.Context, recorder Recorder, snap usageprovider.Sna
 	}
 	if capacity.NextExpiry != nil {
 		recorder.RecordGauge(ctx, MetricResetsSecondsToNextExpiry, capacity.NextExpiry.Sub(now.UTC()).Seconds(), attrs...)
+	}
+
+	if capacity.LastUsed != nil {
+		recorder.RecordGauge(ctx, MetricResetsLastUsedUnixSeconds, float64(capacity.LastUsed.Unix()), attrs...)
 	}
 
 	for _, win := range snap.Windows {

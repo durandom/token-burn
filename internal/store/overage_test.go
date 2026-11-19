@@ -35,7 +35,7 @@ func TestOverageSnapshotsPreserveDecimalAndLatestState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if latest == nil || latest.Balance != tc.credits.Balance {
+			if latest == nil || latest.Balance != tc.credits.Balance || latest.ObservedAt == nil || !latest.ObservedAt.Equal(snap.ObservedAt) || latest.ObservedAt.Location() != time.UTC {
 				t.Fatalf("latest %+v", latest)
 			}
 		})

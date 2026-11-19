@@ -36,6 +36,7 @@ token_burn_usage_seconds_to_reset
 token_burn_usage_window_seconds
 token_burn_resets_available
 token_burn_resets_seconds_to_next_expiry
+token_burn_resets_last_used_unix_seconds
 token_burn_forecast_burn_rate_percent_per_hour
 token_burn_forecast_projected_reset_percent
 token_burn_forecast_estimated_90_unix_seconds
@@ -128,7 +129,7 @@ An OpenObserve dashboard template is included at
 
 OTLP is an ingestion protocol and does not provide a read API. `token-burn`
 supports reading its exported metrics through OpenObserve's Search API for the
-`tui`, `status`, `once`, `history`, and `forecast` commands. The read endpoint
+`tui`, `status`, `once`, `history`, `resets`, and `forecast` commands. The read endpoint
 is configured separately from the OTLP export endpoint under `[otel.read]`.
 Basic Auth credentials can be stored directly as `username` and `password` in
 the mode-0600 config file, or read from the configured environment-variable
@@ -148,13 +149,18 @@ local database cannot be opened, is empty, or its latest samples are stale. Use
   expiry among owned available credits. Emitted only when an expiry is known and
   the owned count is nonzero. Expired or used credits do not supply an expiry.
 
-Both gauges carry only `provider` and configured `account_id`. They never carry
+- `token_burn_resets_last_used_unix_seconds`: absolute UTC Unix seconds of the
+  latest known reset use (provider redemption timestamp or stored `used` event,
+  including an inferred Claude use). Omitted when no use is known; a grant is
+  never treated as a use. Unit: seconds since Unix epoch.
+
+All three gauges carry only `provider` and configured `account_id`. They never carry
 email, credit/grant IDs, event IDs, plan-period IDs, or a per-window attribute.
 The daemon enriches usage snapshots from SQLite during slow-detail poll gaps,
 so the available gauge refreshes with usage and expiry seconds decrease between
 detail polls. Consumers should treat a missing expiry sample as unknown rather
 than carry it forward indefinitely. Historical reset events and plan breakdowns
-stay in SQLite and are available through `resets --json`.
+stay in SQLite and are available through `resets --json` in SQLite read mode.
 
 ## Overage-credit gauges
 
@@ -236,3 +242,63 @@ balance is `"0"`; negative balances are retained. The flags are never inferred
 from balance. Historical usage reads do not attach credit history; forecasts
 attach the latest fresh credit observation using the configured read lookback,
 independently of their `--since` history range.
+
+
+### Dated capacity in CLI JSON
+
+In both SQLite and OpenObserve read modes, `status --json` and `forecast --json`
+attach account-level `overage_credits` and `reset_capacity` to each usage-window
+row. `resets --json` attaches the same objects to each configured account row.
+Existing row field names are unchanged: status uses `Provider` and `AccountID`;
+forecast and resets use `provider` and `account_id`. Capacity fields use:
+
+```json
+{
+  "overage_credits": {
+    "has_credits": true,
+    "unlimited": false,
+    "overage_limit_reached": false,
+    "balance": "62750",
+    "observed_at": "2026-11-19T11:59:00Z"
+  },
+  "reset_capacity": {
+    "owned_resets": 2,
+    "next_expiry": "2026-11-20T12:00:00Z",
+    "last_used": "2026-11-18T09:00:00Z",
+    "observed_at": "2026-11-19T12:00:00Z"
+  }
+}
+```
+
+All dates are absolute UTC RFC3339 timestamps. The two observations are dated
+independently of one another and of the usage window. In SQLite mode, credit
+`observed_at` is the stored credit observation timestamp (the decimal string is
+preserved), and reset `observed_at` is the latest provider reset-summary
+observation, preserved across usage-only polls and failed detail attempts.
+SQLite reads retain the latest known data; the remote freshness cutoff below
+is specific to telemetry reconstruction.
+
+In OpenObserve mode, reset gauges are joined by `(provider, account_id)` without
+window attributes. A finite, nonnegative integer `token_burn_resets_available`
+sample anchors the cohort and supplies `observed_at` from its export timestamp,
+just as credit observations describe telemetry freshness. It must be inside the
+configured lookback, at most two minutes old, and not in the future. Missing
+streams, invalid counts, stale samples, or future samples leave `reset_capacity`
+nil, so the whole field is omitted. Zero is a valid owned count.
+
+Optional expiry and last-use samples must be within two seconds of the count
+sample, at most two minutes old, inside lookback, and not in the future. An
+omitted optional gauge is never carried forward from a different export.
+`next_expiry` is the expiry gauge's observation timestamp plus its positive
+`seconds_to_next_expiry` value; zero owned resets suppress expiry. `last_used`
+is decoded directly from the positive Unix-seconds value, which must not be in
+the future. Unknown optional values remain JSON `null`, preserving the existing
+`next_expiry` and `last_used` field names. Old exporters without the last-use
+gauge therefore return `last_used: null`.
+
+`resets` in OpenObserve mode queries only OpenObserve, including for JSON; it
+never opens or falls back to SQLite. It exposes the same reconstructed capacity
+and live credits. Existing detailed history fields remain present but empty or
+null: exported gauges cannot reconstruct grant IDs, individual credits, events,
+plan periods, errors, or detail polling metadata. The configured-credit overlay
+remains separate. These additions do not change synchronous gauge temporality.

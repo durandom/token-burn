@@ -382,3 +382,38 @@ func TestOTLPOverageMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestResetLastUsedGauge(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	used := usageprovider.Timestamp{Time: now.Add(-time.Hour)}
+	for _, tc := range []struct {
+		name    string
+		details *usageprovider.ResetDetails
+		want    bool
+	}{
+		{name: "unknown"},
+		{name: "redeemed credit", details: &usageprovider.ResetDetails{Credits: []usageprovider.ResetCredit{{ID: "private-id", RedeemedAt: &used}}}, want: true},
+		{name: "use event", details: &usageprovider.ResetDetails{Events: []usageprovider.ResetEvent{{Kind: "used", OccurredAt: used}}}, want: true},
+		{name: "grant is not use", details: &usageprovider.ResetDetails{Events: []usageprovider.ResetEvent{{Kind: "granted", OccurredAt: used}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &fakeRecorder{}
+			EmitSnapshot(context.Background(), recorder, usageprovider.Snapshot{Provider: "codex", AccountID: "local", ResetDetails: tc.details}, now)
+			if tc.want {
+				assertGauge(t, recorder, MetricResetsLastUsedUnixSeconds, float64(used.Unix()), map[string]string{"provider": "codex", "account_id": "local"})
+			}
+			found := false
+			for _, g := range recorder.gauges {
+				if g.name == MetricResetsLastUsedUnixSeconds {
+					found = true
+					if len(g.attrs) != 2 {
+						t.Fatal("last-use gauge has high-cardinality attributes")
+					}
+				}
+			}
+			if found != tc.want {
+				t.Fatalf("last-used gauge present=%t", found)
+			}
+		})
+	}
+}

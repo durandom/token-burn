@@ -37,6 +37,7 @@ type Account struct {
 }
 
 type Snapshot struct {
+	Resets    map[Account]*forecast.ResetCapacity
 	Credits   map[Account]*provider.OverageCredits
 	Samples   []store.Sample
 	Forecasts []Forecast
@@ -93,7 +94,9 @@ var creditMetricNames = []string{
 	otel.MetricOverageLimitReached,
 }
 
-var metricNames = append([]string{
+var resetMetricNames = []string{otel.MetricResetsAvailable, otel.MetricResetsSecondsToNextExpiry, otel.MetricResetsLastUsedUnixSeconds}
+
+var metricNames = append(append([]string{
 	otel.MetricUsageUsedPercent,
 	otel.MetricUsageRemainingPercent,
 	otel.MetricUsageResetUnixSeconds,
@@ -103,7 +106,7 @@ var metricNames = append([]string{
 	otel.MetricForecastEstimated90Unix,
 	otel.MetricForecastEstimated100Unix,
 	otel.MetricForecastConfidence,
-}, creditMetricNames...)
+}, creditMetricNames...), resetMetricNames...)
 
 func (c Client) Fetch(ctx context.Context, now time.Time) (Snapshot, error) {
 	lookback := c.Config.Lookback
@@ -161,7 +164,7 @@ func (c Client) fetch(ctx context.Context, start, now time.Time, latestOnly bool
 	results := make(chan result, len(metricNames))
 	var wg sync.WaitGroup
 	for _, name := range metricNames {
-		if !latestOnly && isCreditMetric(name) {
+		if !latestOnly && isAccountMetric(name) {
 			continue
 		}
 		wg.Add(1)
@@ -187,6 +190,7 @@ func (c Client) fetch(ctx context.Context, start, now time.Time, latestOnly bool
 	out := assemble(byMetric, latestOnly)
 	if latestOnly {
 		out.Credits = assembleCredits(byMetric, now)
+		out.Resets = assembleResets(byMetric, now)
 	}
 	return out, nil
 }
@@ -199,8 +203,8 @@ func (c Client) queryMetric(ctx context.Context, metric string, start, end time.
 	base.Path = strings.TrimRight(base.Path, "/") + "/api/" + url.PathEscape(c.Config.Organization) + "/_search"
 	base.RawQuery = "type=metrics"
 	columns := "_timestamp, provider, account_id, window, plan_type, source, value"
-	creditMetric := isCreditMetric(metric)
-	if creditMetric {
+	accountMetric := isAccountMetric(metric)
+	if accountMetric {
 		columns = "_timestamp, provider, account_id, value"
 	}
 	body := map[string]any{"query": map[string]any{
@@ -251,7 +255,7 @@ func (c Client) queryMetric(ctx context.Context, metric string, start, end time.
 			continue
 		}
 		value, err := hit.Value.Float64()
-		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || hit.Provider == "" || hit.Account == "" || (!creditMetric && hit.Window == "") || timestamp < start.UnixMicro() || timestamp > end.UnixMicro() {
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || hit.Provider == "" || hit.Account == "" || (!accountMetric && hit.Window == "") || timestamp < start.UnixMicro() || timestamp > end.UnixMicro() {
 			continue
 		}
 		points = append(points, metricPoint{Timestamp: timestamp, Provider: hit.Provider, Account: hit.Account, Window: hit.Window, PlanType: unknownToEmpty(hit.PlanType), Source: unknownToEmpty(hit.Source), Value: value})
@@ -282,7 +286,7 @@ func assemble(metrics map[string][]metricPoint, latestOnly bool) Snapshot {
 	}
 	rows := map[string]*values{}
 	for name, points := range metrics {
-		if isCreditMetric(name) {
+		if isAccountMetric(name) {
 			continue
 		}
 		for _, point := range points {
@@ -390,8 +394,13 @@ func unknownToEmpty(value string) string {
 	return value
 }
 
-func isCreditMetric(name string) bool {
+func isAccountMetric(name string) bool {
 	for _, metric := range creditMetricNames {
+		if name == metric {
+			return true
+		}
+	}
+	for _, metric := range resetMetricNames {
 		if name == metric {
 			return true
 		}
@@ -436,6 +445,54 @@ func assembleCredits(metrics map[string][]metricPoint, now time.Time) map[Accoun
 			credits.Balance = strconv.FormatFloat(balance.Value, 'f', -1, 64)
 		}
 		out[account] = credits
+	}
+	return out
+}
+
+// Reset gauges are joined independently of usage and credit observations. The
+// count anchors the cohort; optional gauges from older exports stay unknown.
+func assembleResets(metrics map[string][]metricPoint, now time.Time) map[Account]*forecast.ResetCapacity {
+	out := map[Account]*forecast.ResetCapacity{}
+	optional := map[Account]map[string]metricPoint{}
+	for _, name := range resetMetricNames[1:] {
+		for _, p := range metrics[name] {
+			a := Account{Provider: p.Provider, ID: p.Account}
+			if optional[a] == nil {
+				optional[a] = map[string]metricPoint{}
+			}
+			if old, ok := optional[a][name]; !ok || p.Timestamp > old.Timestamp {
+				optional[a][name] = p
+			}
+		}
+	}
+	for _, p := range metrics[otel.MetricResetsAvailable] {
+		observed := time.UnixMicro(p.Timestamp).UTC()
+		if observed.After(now) || now.Sub(observed) > 2*time.Minute || p.Value < 0 || p.Value != math.Trunc(p.Value) || p.Value >= float64(math.MaxInt) {
+			continue
+		}
+		a := Account{Provider: p.Provider, ID: p.Account}
+		count := int(p.Value)
+		c := &forecast.ResetCapacity{OwnedResets: &count, ObservedAt: &observed}
+		for name, v := range optional[a] {
+			at := time.UnixMicro(v.Timestamp).UTC()
+			skew := at.Sub(observed)
+			if skew < -2*time.Second || skew > 2*time.Second || at.After(now) || now.Sub(at) > 2*time.Minute {
+				continue
+			}
+			switch name {
+			case otel.MetricResetsSecondsToNextExpiry:
+				if count > 0 && v.Value > 0 && v.Value < float64(math.MaxInt64)/float64(time.Second) {
+					expiry := at.Add(time.Duration(v.Value * float64(time.Second)))
+					c.NextExpiry = &expiry
+				}
+			case otel.MetricResetsLastUsedUnixSeconds:
+				if v.Value > 0 && v.Value <= float64(now.Unix()) {
+					used := time.Unix(int64(v.Value), 0).UTC()
+					c.LastUsed = &used
+				}
+			}
+		}
+		out[a] = c
 	}
 	return out
 }
