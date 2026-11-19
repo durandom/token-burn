@@ -81,6 +81,7 @@ type Sample struct {
 type migration struct {
 	version int
 	sql     string
+	prepare func(context.Context, *sql.Tx) error
 }
 
 var migrations = []migration{
@@ -158,8 +159,8 @@ CREATE TABLE IF NOT EXISTS daemon_state (
 	},
 	{version: 3, sql: resetSchema},
 	{version: 4, sql: overageSchema},
-	{version: 5, sql: `ALTER TABLE reset_state ADD COLUMN capacity_observed_at TEXT;
- UPDATE reset_state SET capacity_observed_at=observed_at WHERE summary IS NOT NULL;`},
+	{version: 5, sql: datedResetCapacitySchema},
+	{version: 6, sql: creditBalanceSchema, prepare: ensureDatedResetCapacity},
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -220,6 +221,11 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		}
 		if exists > 0 {
 			continue
+		}
+		if m.prepare != nil {
+			if err := m.prepare(ctx, tx); err != nil {
+				return fmt.Errorf("prepare migration %d: %w", m.version, err)
+			}
 		}
 		if _, err := tx.ExecContext(ctx, m.sql); err != nil {
 			return fmt.Errorf("apply migration %d: %w", m.version, err)
@@ -308,6 +314,9 @@ INSERT OR IGNORE INTO live_usage_samples (
 		}
 	}
 
+	if err := insertCreditBalance(ctx, tx, snap); err != nil {
+		return err
+	}
 	if err := insertOverageCredits(ctx, tx, snap); err != nil {
 		return err
 	}

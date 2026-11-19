@@ -22,6 +22,7 @@ import (
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 	"github.com/durandom/token-burn/internal/provider/antigravity"
 	"github.com/durandom/token-burn/internal/provider/claude"
+	"github.com/durandom/token-burn/internal/provider/claudeplatform"
 	"github.com/durandom/token-burn/internal/provider/codex"
 	"github.com/durandom/token-burn/internal/provider/copilot"
 	"github.com/durandom/token-burn/internal/provider/xai"
@@ -66,6 +67,8 @@ func NewRootCommand(build BuildInfo) *cobra.Command {
 	root.AddCommand(newStatusCommand(&configPath))
 	root.AddCommand(newHistoryCommand(&configPath))
 	root.AddCommand(newResetsCommand(&configPath))
+	root.AddCommand(newCreditsCommand(&configPath))
+	root.AddCommand(newAuthCommand(&configPath))
 	root.AddCommand(newForecastCommand(&configPath))
 	root.AddCommand(newDaemonCommand(&configPath, &verbose))
 	root.AddCommand(newInstallCommand(&configPath))
@@ -893,6 +896,8 @@ func providerFor(name string) (usageprovider.Provider, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "codex":
 		return codex.New(), true
+	case "claude-platform":
+		return claudeplatform.New(), true
 	case "claude", "claude_code":
 		return claude.New(), true
 	case "copilot", "github_copilot":
@@ -1002,6 +1007,9 @@ func writeJSON(w io.Writer, value any) error {
 func printOnceText(w io.Writer, result onceResult) {
 	for _, snap := range result.Snapshots {
 		fmt.Fprintf(w, "%s/%s %s\n", snap.Provider, snap.AccountID, snap.PlanType)
+		if c := snap.CreditBalance; c != nil {
+			fmt.Fprintf(w, "  API balance %s\n", c.Balance)
+		}
 		for _, win := range snap.Windows {
 			fmt.Fprintf(w, "  %s: %.1f%%", win.Name, win.UsedPercent)
 			if win.ResetAt != nil {

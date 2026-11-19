@@ -251,3 +251,15 @@ Remote `resets --json` uses this same reconstruction with no SQLite access.
 Detailed credit/event/plan history cannot be rebuilt from gauges and remains
 empty or null in that mode; the existing fields retain their names. Local
 `resets --json` retains the detailed history and adds `reset_capacity`.
+
+## Monetary credit balances
+
+Schema migration 6 adds `credit_balance_snapshots`, keyed by provider, account ID,
+and UTC observation time. Its normalized JSON stores organization ID, total
+balance, and credit grants (program, name, granted/remaining integer minor units,
+currency, decimal exponent, scope and optional expiry). The table is independent
+of usage windows and Codex overage-credit snapshots. Failed fetches leave the
+last successful observation intact; `poll_runs` records the failure separately.
+Migration 6 also upgrades databases from the Console development build that
+recorded the balance table as migration 5, preserving their balances and applying
+the dated reset capacity schema.

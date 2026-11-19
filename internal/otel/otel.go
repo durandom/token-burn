@@ -3,6 +3,7 @@ package otel
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 const (
 	MetricCreditSecondsToNextExpiry     = "token_burn_credit_seconds_to_next_expiry"
 	MetricCreditAmountExpiring          = "token_burn_credit_amount_expiring"
+	MetricAPICreditBalance              = "token_burn_api_credit_balance"
 	MetricOverageCreditsBalance         = "token_burn_overage_credits_balance"
 	MetricOverageCreditsHasCredits      = "token_burn_overage_credits_has_credits"
 	MetricOverageCreditsUnlimited       = "token_burn_overage_credits_unlimited"
@@ -131,6 +133,9 @@ func (e *Exporter) AddCounter(ctx context.Context, name string, value int64, att
 }
 
 func EmitSnapshot(ctx context.Context, recorder Recorder, snap usageprovider.Snapshot, now time.Time, configured ...*forecast.ConfiguredCreditCapacity) {
+	if c := snap.CreditBalance; c != nil {
+		recorder.RecordGauge(ctx, MetricAPICreditBalance, float64(c.Balance.AmountMinor)/math.Pow10(c.Balance.Exponent), attribute.String("provider", snap.Provider), attribute.String("account_id", snap.AccountID), attribute.String("currency", c.Balance.Currency), attribute.String("source", snap.Source))
+	}
 	if len(configured) > 0 && configured[0] != nil {
 		c := configured[0]
 		attrs := []attribute.KeyValue{attribute.String("provider", snap.Provider), attribute.String("account_id", snap.AccountID), attribute.String("source", "configured")}

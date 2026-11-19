@@ -302,3 +302,12 @@ and live credits. Existing detailed history fields remain present but empty or
 null: exported gauges cannot reconstruct grant IDs, individual credits, events,
 plan periods, errors, or detail polling metadata. The configured-credit overlay
 remains separate. These additions do not change synchronous gauge temporality.
+
+## Console monetary credits
+
+`token_burn_api_credit_balance` records the provider-reported prepaid API balance
+in major currency units. Attributes are `provider`, `account_id`, `currency`, and
+`source`. Exact integer minor units and the decimal exponent remain in SQLite;
+only telemetry converts to floating point. This metric is independent of Codex
+credit units and configured grant-expiry metrics. Failed polls emit no new
+balance. The OpenObserve TUI reader currently does not reconstruct these records.

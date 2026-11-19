@@ -417,3 +417,9 @@ func TestResetLastUsedGauge(t *testing.T) {
 		})
 	}
 }
+
+func TestConsoleBalanceMetricHasCurrency(t *testing.T) {
+	recorder := &fakeRecorder{}
+	EmitSnapshot(context.Background(), recorder, usageprovider.Snapshot{Provider: "claude-platform", AccountID: "console", Source: "claude_console_prepaid", CreditBalance: &usageprovider.CreditBalance{Balance: usageprovider.Money{AmountMinor: 21776, Currency: "USD", Exponent: 2}}}, time.Now())
+	assertGauge(t, recorder, MetricAPICreditBalance, 217.76, map[string]string{"provider": "claude-platform", "account_id": "console", "currency": "USD", "source": "claude_console_prepaid"})
+}

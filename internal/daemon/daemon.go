@@ -19,6 +19,7 @@ import (
 	usageprovider "github.com/durandom/token-burn/internal/provider"
 	"github.com/durandom/token-burn/internal/provider/antigravity"
 	"github.com/durandom/token-burn/internal/provider/claude"
+	"github.com/durandom/token-burn/internal/provider/claudeplatform"
 	"github.com/durandom/token-burn/internal/provider/codex"
 	"github.com/durandom/token-burn/internal/provider/copilot"
 	"github.com/durandom/token-burn/internal/provider/xai"
@@ -270,6 +271,15 @@ func PollOnce(ctx context.Context, db *store.Store, opts Options) (PollResult, e
 	now := opts.now()
 	for _, acct := range opts.Config.Accounts {
 		startedAt := opts.now()
+		if acct.Provider == claudeplatform.ID {
+			last, err := db.LatestPollAttempt(ctx, acct.Provider, acct.ID)
+			if err != nil {
+				return result, err
+			}
+			if last != nil && startedAt.Before(last.Add(claudeplatform.PollInterval)) {
+				continue
+			}
+		}
 		skip, cooldownRemaining, err := shouldSkipRateLimitedAccount(ctx, db, acct.Provider, acct.ID, startedAt, opts.Config.PollInterval)
 		if err != nil {
 			return result, err
@@ -573,6 +583,8 @@ func (o Options) providerFor(name string) (usageprovider.Provider, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "codex":
 		return codex.New(), true
+	case "claude-platform":
+		return claudeplatform.New(), true
 	case "claude", "claude_code":
 		return claude.New(), true
 	case "copilot", "github_copilot":

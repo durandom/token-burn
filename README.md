@@ -542,3 +542,55 @@ More detail lives in [docs/ROADMAP.md](docs/ROADMAP.md).
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Claude Platform API credit balances
+
+Add an opt-in Console account alongside your existing Claude subscription account:
+
+```toml
+[[accounts]]
+provider = "claude-platform"
+id = "claude-platform-default"
+# Optional for a single API organization; required when you belong to several:
+# provider_account_id = "your-console-organization-uuid"
+```
+
+Sign in to `https://platform.claude.com` and obtain the `sessionKey` cookie value
+from your browser's developer tools. Import only that value through stdin, for
+example from a temporary private file:
+
+```sh
+token-burn auth claude-platform < /path/to/private-session-file
+token-burn once --store
+token-burn credits
+```
+
+The import verifies billing access before saving the session. On macOS it stores
+the credential in Keychain, under service `token-burn.claude-platform` and the
+configured account ID. Secrets are passed to the Keychain helper through stdin,
+not command arguments. The login Keychain must be available to the daemon. For
+Linux, or an explicit file alternative on macOS, add
+`credentials_file = "~/.config/token-burn/claude-platform.session"` to that account
+before importing. The importer writes it atomically with mode 0600; the daemon
+rejects files accessible to other users.
+
+The daemon fetches Console balances at most once every 15 minutes, preserving the
+attempt cadence across restarts. `once` performs an explicit immediate fetch.
+The TUI shows the stored balance and each grant’s remaining amount, original
+amount, and expiry; `credits --json` includes
+all grants, original currency units, scope restrictions and observation times.
+The total is taken directly from the provider and can differ from the sum of
+rounded grant amounts. Expiry dates are not quota resets. Subscription API grants
+in the Console are separate from Claude subscription extra-usage credits.
+
+Console balance endpoints are undocumented and require a Console session cookie;
+an API key that can read organization cost reports cannot read this balance.
+No browser cookies are imported automatically. If the session expires, reimport
+it manually: the daemon does not open a browser or start a login flow. Failed
+polls retain the previous balance and its observation time, with an account error
+in the TUI. This provider does not infer balances from API spending.
+
+OTel exports `token_burn_api_credit_balance` in major currency units with
+`provider`, `account_id`, `currency`, and `source` attributes. Console balances
+currently display from local SQLite; the OpenObserve TUI reader does not yet
+reconstruct monetary credit records.

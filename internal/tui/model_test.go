@@ -995,3 +995,33 @@ func TestFormatCredits(t *testing.T) {
 		}
 	}
 }
+
+func TestStoredConsoleBalanceSurvivesFailedRefresh(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Accounts = []config.Account{{Provider: "claude-platform", ID: "console"}}
+	ctx := context.Background()
+	db, err := store.Open(ctx, cfg.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	expiry := now.Add(24 * time.Hour)
+	err = db.InsertSnapshot(ctx, provider.Snapshot{Provider: "claude-platform", AccountID: "console", ObservedAt: now, CreditBalance: &provider.CreditBalance{OrganizationID: "org", Balance: provider.Money{AmountMinor: 21776, Currency: "USD", Exponent: 2}, Grants: []provider.CreditGrant{{Remaining: provider.Money{AmountMinor: 20000}, ExpiresAt: &expiry}}}}, store.InsertOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := now.Add(time.Minute)
+	if err := db.RecordPollRun(ctx, store.PollRun{Provider: "claude-platform", AccountID: "console", StartedAt: failed, FinishedAt: &failed, Status: "error", ErrorCode: "auth_expired", ErrorMessage: "Console login required"}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	msg := localRefresh(ctx, cfg, failed)
+	model := NewModel(cfg)
+	next, _ := model.Update(msg)
+	view := next.(Model).View()
+	for _, want := range []string{"claude-platform/console", "API balance $217.76", "next expiry", "observed", "auth"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q in %s", want, view)
+		}
+	}
+}

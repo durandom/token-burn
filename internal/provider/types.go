@@ -29,6 +29,7 @@ type Snapshot struct {
 	ObservedAt              time.Time
 	Windows                 []Window
 	OverageCredits          *OverageCredits
+	CreditBalance           *CreditBalance
 	Resets                  *ResetSummary
 	ResetDetails            *ResetDetails
 	ResetDetailsAttemptedAt *time.Time
